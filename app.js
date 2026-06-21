@@ -718,12 +718,9 @@ function handleChartWheel(event) {
 function startChartPinch(event) {
   if (event.touches.length !== 2) return;
   event.preventDefault();
-  const center = getTouchCenter(event.touches);
   state.chartPinch = {
     distance: getTouchDistance(event.touches),
-    scale: state.chartScale,
-    contentX: (els.chartViewport.scrollLeft + center.x) / state.chartScale,
-    contentY: (els.chartViewport.scrollTop + center.y) / state.chartScale
+    scale: state.chartScale
   };
 }
 
@@ -733,12 +730,16 @@ function moveChartPinch(event) {
   const center = getTouchCenter(event.touches);
   const distance = getTouchDistance(event.touches);
   const ratio = distance / Math.max(1, state.chartPinch.distance);
+  const contentX = (els.chartViewport.scrollLeft + center.x) / state.chartScale;
+  const contentY = (els.chartViewport.scrollTop + center.y) / state.chartScale;
   setChartScale(state.chartPinch.scale * ratio, {
-    contentX: state.chartPinch.contentX,
-    contentY: state.chartPinch.contentY,
+    contentX,
+    contentY,
     viewportX: center.x,
     viewportY: center.y
   });
+  state.chartPinch.distance = distance;
+  state.chartPinch.scale = state.chartScale;
 }
 
 function endChartPinch(event) {
@@ -981,8 +982,9 @@ function groupByPrimaryAffiliation(characters) {
 
 function createAffiliationFrames(positions, boardWidth, characters) {
   const padX = 22;
-  const padTop = 46;
+  const padTop = 64;
   const padBottom = 24;
+  const labelHeight = 28;
   return getAllAffiliations().map((affiliation, index) => {
     const members = characters
       .filter((character) => (character.affiliations || []).includes(affiliation))
@@ -995,13 +997,18 @@ function createAffiliationFrames(positions, boardWidth, characters) {
     const minY = Math.max(14, Math.min(...members.map((node) => node.y)) - padTop - offset);
     const maxX = Math.min(boardWidth - 14, Math.max(...members.map((node) => node.x + node.width)) + padX + offset);
     const maxY = Math.max(...members.map((node) => node.y + node.height)) + padBottom + offset;
+    const labelWidth = Math.max(64, Math.min(maxX - minX - 20, 220, affiliation.length * 16 + 26));
+    const minFrameWidth = labelWidth + 24;
+    const width = Math.max(maxX - minX, minFrameWidth);
+    const x = Math.min(Math.max(14, minX), Math.max(14, boardWidth - width - 14));
     return {
       name: affiliation,
       color: getAffiliationColor(index),
-      x: minX,
+      x,
       y: minY,
-      width: maxX - minX,
-      height: maxY - minY
+      width,
+      height: Math.max(maxY - minY, padTop + labelHeight + padBottom),
+      labelWidth
     };
   }).filter(Boolean).sort((a, b) => (b.width * b.height) - (a.width * a.height));
 }
@@ -1032,13 +1039,12 @@ function drawAffiliationFrames(svg, layout, labelLayerItems) {
       "data-focus-id": group.name
     }));
 
-    const labelWidth = Math.max(64, Math.min(group.width - 20, 220, group.name.length * 16 + 26));
     labelLayerItems.push({
       type: "affiliation",
       text: group.name,
       color,
       frame: group,
-      width: labelWidth,
+      width: group.labelWidth,
       height: 28
     });
   });
@@ -1051,24 +1057,18 @@ function placeAffiliationLabel(item, boardWidth, boardHeight, blockers, index = 
   const candidates = [];
   const left = frame.x + 10;
   const right = frame.x + frame.width - width - 10;
-  const insideMaxY = frame.y + frame.height - height - 8;
+  const insideTop = frame.y + 9;
+  const insideMaxY = Math.min(frame.y + 38, frame.y + frame.height - height - 8);
 
-  for (let y = frame.y + 9; y <= insideMaxY; y += 34) {
+  for (let y = insideTop; y <= insideMaxY; y += 34) {
     candidates.push({ x: left, y, width, height });
     if (right > left + 8) candidates.push({ x: right, y, width, height });
   }
 
-  candidates.push(
-    { x: left, y: frame.y - height - 8, width, height },
-    { x: right, y: frame.y - height - 8, width, height },
-    { x: left, y: frame.y + frame.height + 8, width, height },
-    { x: right, y: frame.y + frame.height + 8, width, height }
-  );
-
   const normalized = candidates.map((candidate) => ({
     ...candidate,
-    x: clamp(candidate.x, 8, boardWidth - width - 8),
-    y: clamp(candidate.y, 8, boardHeight - height - 8)
+    x: clamp(candidate.x, frame.x + 8, frame.x + frame.width - width - 8),
+    y: clamp(candidate.y, frame.y + 8, frame.y + frame.height - height - 8)
   }));
   const rotated = normalized.slice(index % normalized.length).concat(normalized.slice(0, index % normalized.length));
   const clearCandidate = rotated.find((candidate) => !blockers.some((blocker) => boxesOverlap(candidate, blocker)));
@@ -1122,7 +1122,8 @@ function drawRelationshipLines(svg, layout, labelLayerItems) {
     const pairIndex = pairIndexes.get(key) || 0;
     pairIndexes.set(key, pairIndex + 1);
     const pairCount = pairCounts.get(key) || 1;
-    const geometry = createRelationshipGeometry(item.from, item.to, layout.nodes, pairCount, pairIndex);
+    const directionSign = item.source.id < item.relation.targetId ? 1 : -1;
+    const geometry = createRelationshipGeometry(item.from, item.to, layout.nodes, pairCount, pairIndex, directionSign);
 
     const group = createSvgElement("g", {
       class: "chart-relation-group",
@@ -1252,7 +1253,7 @@ function createRelationPairKey(sourceId, targetId) {
   return [sourceId, targetId].sort().join("::");
 }
 
-function createRelationshipGeometry(from, to, nodes, pairCount, pairIndex) {
+function createRelationshipGeometry(from, to, nodes, pairCount, pairIndex, directionSign = 1) {
   const start = getNodeEdgePoint(from, to);
   const end = getNodeEdgePoint(to, from);
   const dx = end.x - start.x;
@@ -1260,16 +1261,19 @@ function createRelationshipGeometry(from, to, nodes, pairCount, pairIndex) {
   const length = Math.max(1, Math.hypot(dx, dy));
   const normalX = -dy / length;
   const normalY = dx / length;
-  const stackedOffset = pairCount > 1 ? (pairIndex - (pairCount - 1) / 2) * 32 : 0;
+  const spread = pairCount > 1 ? 56 : 0;
+  const stackedOffset = pairCount > 1
+    ? ((pairIndex - (pairCount - 1) / 2) * spread) || directionSign * spread / 2
+    : 0;
   const hasObstacle = segmentHitsAnotherNode(start, end, nodes, from, to);
   const needsCurve = pairCount > 1 || hasObstacle;
   const bend = needsCurve
-    ? (stackedOffset || 54) * (hasObstacle && stackedOffset === 0 ? 1 : 1)
+    ? (stackedOffset || directionSign * 54)
     : 0;
-  const startX = start.x + normalX * stackedOffset * 0.18;
-  const startY = start.y + normalY * stackedOffset * 0.18;
-  const endX = end.x + normalX * stackedOffset * 0.18;
-  const endY = end.y + normalY * stackedOffset * 0.18;
+  const startX = start.x + normalX * stackedOffset * 0.08;
+  const startY = start.y + normalY * stackedOffset * 0.08;
+  const endX = end.x + normalX * stackedOffset * 0.08;
+  const endY = end.y + normalY * stackedOffset * 0.08;
 
   if (!needsCurve) {
     return {
@@ -1440,16 +1444,6 @@ function renderDetail() {
     direction: "to",
     other: getCharacterById(relation.targetId)
   }));
-  const incoming = state.characters.flatMap((source) => {
-    return (source.relationships || [])
-      .filter((relation) => relation.targetId === character.id)
-      .map((relation) => ({
-        ...relation,
-        direction: "from",
-        other: source
-      }));
-  });
-
   els.detailPanel.innerHTML = `
     <div class="detail-hero">
       ${renderImageTag(character.icon, "detail-icon", character.name)}
@@ -1471,19 +1465,16 @@ function renderDetail() {
     <section class="detail-section">
       <h3>関係線</h3>
       <div class="detail-relations">
-        ${renderDetailRelations(outgoing, incoming)}
+        ${renderDetailRelations(outgoing)}
       </div>
     </section>
   `;
 }
 
-function renderDetailRelations(outgoing, incoming) {
+function renderDetailRelations(outgoing) {
   const rows = [];
   outgoing.forEach((relation) => {
     rows.push(`<div class="relation-row"><span><strong>${escapeHtml(relation.other?.name || "削除済み")}</strong> <span>${escapeHtml(relation.label)}</span></span></div>`);
-  });
-  incoming.forEach((relation) => {
-    rows.push(`<div class="relation-row"><span><strong>${escapeHtml(relation.other?.name || "削除済み")}</strong> <span>から ${escapeHtml(relation.label)}</span></span></div>`);
   });
   return rows.join("") || "<div class=\"empty-state\"><span>関係線未登録</span></div>";
 }
