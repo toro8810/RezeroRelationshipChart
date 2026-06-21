@@ -19,6 +19,7 @@ const state = {
   chartFocus: null,
   chartScale: 1,
   chartPinch: null,
+  chartPan: null,
   listControlsOpen: false,
   listViewMode: "detail",
   crop: {
@@ -56,6 +57,7 @@ function bindElements() {
   els.form = document.getElementById("character-form");
   els.name = document.getElementById("name-input");
   els.affiliations = document.getElementById("affiliations-input");
+  els.url = document.getElementById("url-input");
   els.description = document.getElementById("description-input");
   els.newBtn = document.getElementById("new-character-btn");
   els.saveBtn = document.getElementById("save-character-btn");
@@ -337,6 +339,7 @@ async function saveDraft({ allowFallbackName }) {
   const character = {
     id,
     name: name || createUntitledName(id),
+    url: els.url.value.trim(),
     icon: state.draftIcon,
     images: state.draftImages,
     description: els.description.value.trim(),
@@ -395,6 +398,7 @@ function loadCharacterIntoForm(character) {
   state.draftImages = [...(character.images || [])];
   state.draftRelations = [...(character.relationships || [])];
   els.name.value = character.name || "";
+  els.url.value = character.url || "";
   els.affiliations.value = (character.affiliations || []).join(", ");
   els.description.value = character.description || "";
   els.deleteBtn.disabled = false;
@@ -422,6 +426,7 @@ function renderAll() {
 function hasDraftContent() {
   return Boolean(
     els.name.value.trim()
+    || els.url.value.trim()
     || els.affiliations.value.trim()
     || els.description.value.trim()
     || state.draftIcon
@@ -434,6 +439,7 @@ function getDraftSnapshot() {
   return JSON.stringify({
     id: state.editingId || null,
     name: els.name.value.trim(),
+    url: els.url.value.trim(),
     icon: state.draftIcon,
     images: state.draftImages,
     description: els.description.value.trim(),
@@ -716,15 +722,32 @@ function handleChartWheel(event) {
 }
 
 function startChartPinch(event) {
-  if (event.touches.length !== 2) return;
-  event.preventDefault();
-  state.chartPinch = {
-    distance: getTouchDistance(event.touches),
-    scale: state.chartScale
-  };
+  if (event.touches.length === 1) {
+    state.chartPan = {
+      x: event.touches[0].clientX,
+      y: event.touches[0].clientY,
+      scrollLeft: els.chartViewport.scrollLeft,
+      scrollTop: els.chartViewport.scrollTop
+    };
+    return;
+  }
+  if (event.touches.length === 2) {
+    event.preventDefault();
+    state.chartPan = null;
+    state.chartPinch = {
+      distance: getTouchDistance(event.touches)
+    };
+  }
 }
 
 function moveChartPinch(event) {
+  if (event.touches.length === 1 && state.chartPan) {
+    event.preventDefault();
+    els.chartViewport.scrollLeft = state.chartPan.scrollLeft - (event.touches[0].clientX - state.chartPan.x);
+    els.chartViewport.scrollTop = state.chartPan.scrollTop - (event.touches[0].clientY - state.chartPan.y);
+    return;
+  }
+
   if (!state.chartPinch || event.touches.length !== 2) return;
   event.preventDefault();
   const center = getTouchCenter(event.touches);
@@ -732,7 +755,7 @@ function moveChartPinch(event) {
   const ratio = distance / Math.max(1, state.chartPinch.distance);
   const contentX = (els.chartViewport.scrollLeft + center.x) / state.chartScale;
   const contentY = (els.chartViewport.scrollTop + center.y) / state.chartScale;
-  setChartScale(state.chartPinch.scale * ratio, {
+  setChartScale(state.chartScale * ratio, {
     contentX,
     contentY,
     viewportX: center.x,
@@ -745,6 +768,7 @@ function moveChartPinch(event) {
 function endChartPinch(event) {
   if (event.touches?.length >= 2) return;
   state.chartPinch = null;
+  if (!event.touches?.length) state.chartPan = null;
 }
 
 function getTouchCenter(touches) {
@@ -1058,7 +1082,7 @@ function placeAffiliationLabel(item, boardWidth, boardHeight, blockers, index = 
   const left = frame.x + 10;
   const right = frame.x + frame.width - width - 10;
   const insideTop = frame.y + 9;
-  const insideMaxY = Math.min(frame.y + 38, frame.y + frame.height - height - 8);
+  const insideMaxY = Math.min(frame.y + 78, frame.y + frame.height - height - 8);
 
   for (let y = insideTop; y <= insideMaxY; y += 34) {
     candidates.push({ x: left, y, width, height });
@@ -1169,11 +1193,13 @@ function drawChartLabels(svg, items, layout) {
     width: node.width + 16,
     height: node.height + 16
   }));
+  const affiliationLabelBlockers = [];
 
   items.filter((item) => item.type === "affiliation").forEach((item, index) => {
-    const labelBox = placeAffiliationLabel(item, layout.width, layout.height, blockers, index);
+    const labelBox = placeAffiliationLabel(item, layout.width, layout.height, affiliationLabelBlockers, index);
     const placedItem = { ...item, ...labelBox };
     drawAffiliationLabel(svg, placedItem);
+    affiliationLabelBlockers.push(labelBox);
     blockers.push(labelBox);
   });
 
@@ -1261,19 +1287,21 @@ function createRelationshipGeometry(from, to, nodes, pairCount, pairIndex, direc
   const length = Math.max(1, Math.hypot(dx, dy));
   const normalX = -dy / length;
   const normalY = dx / length;
+  const routeNormalX = normalX * directionSign;
+  const routeNormalY = normalY * directionSign;
   const spread = pairCount > 1 ? 56 : 0;
   const stackedOffset = pairCount > 1
-    ? ((pairIndex - (pairCount - 1) / 2) * spread) || directionSign * spread / 2
+    ? ((pairIndex - (pairCount - 1) / 2) * spread)
     : 0;
   const hasObstacle = segmentHitsAnotherNode(start, end, nodes, from, to);
   const needsCurve = pairCount > 1 || hasObstacle;
   const bend = needsCurve
-    ? (stackedOffset || directionSign * 54)
+    ? (stackedOffset || 54)
     : 0;
-  const startX = start.x + normalX * stackedOffset * 0.08;
-  const startY = start.y + normalY * stackedOffset * 0.08;
-  const endX = end.x + normalX * stackedOffset * 0.08;
-  const endY = end.y + normalY * stackedOffset * 0.08;
+  const startX = start.x + routeNormalX * stackedOffset * 0.12;
+  const startY = start.y + routeNormalY * stackedOffset * 0.12;
+  const endX = end.x + routeNormalX * stackedOffset * 0.12;
+  const endY = end.y + routeNormalY * stackedOffset * 0.12;
 
   if (!needsCurve) {
     return {
@@ -1283,8 +1311,8 @@ function createRelationshipGeometry(from, to, nodes, pairCount, pairIndex, direc
     };
   }
 
-  const controlX = startX + dx * 0.5 + normalX * bend;
-  const controlY = startY + dy * 0.5 + normalY * bend;
+  const controlX = startX + dx * 0.5 + routeNormalX * bend;
+  const controlY = startY + dy * 0.5 + routeNormalY * bend;
   return {
     path: `M ${startX} ${startY} Q ${controlX} ${controlY} ${endX} ${endY}`,
     labelX: controlX,
@@ -1444,6 +1472,41 @@ function renderDetail() {
     direction: "to",
     other: getCharacterById(relation.targetId)
   }));
+  const detailSections = [];
+  if (character.url) {
+    detailSections.push(`
+      <section class="detail-section">
+        <h3>URL</h3>
+        <p><a href="${escapeHtml(character.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(character.url)}</a></p>
+      </section>
+    `);
+  }
+  detailSections.push(`
+    <section class="detail-section">
+      <h3>説明</h3>
+      <div class="description-box">${escapeHtml(character.description || "説明未登録")}</div>
+    </section>
+  `);
+  if ((character.images || []).length > 0) {
+    detailSections.push(`
+      <section class="detail-section">
+        <h3>画像</h3>
+        <div class="detail-gallery">
+          ${(character.images || []).map((image) => `<img src="${image.url}" alt="${escapeHtml(image.name || character.name)}">`).join("")}
+        </div>
+      </section>
+    `);
+  }
+  if (outgoing.length > 0) {
+    detailSections.push(`
+      <section class="detail-section">
+        <h3>関係線</h3>
+        <div class="detail-relations">
+          ${renderDetailRelations(outgoing)}
+        </div>
+      </section>
+    `);
+  }
   els.detailPanel.innerHTML = `
     <div class="detail-hero">
       ${renderImageTag(character.icon, "detail-icon", character.name)}
@@ -1452,22 +1515,7 @@ function renderDetail() {
         <div class="affiliation-chips">${renderChips(character.affiliations)}</div>
       </div>
     </div>
-    <section class="detail-section">
-      <h3>説明</h3>
-      <div class="description-box">${escapeHtml(character.description || "説明未登録")}</div>
-    </section>
-    <section class="detail-section">
-      <h3>画像</h3>
-      <div class="detail-gallery">
-        ${(character.images || []).map((image) => `<img src="${image.url}" alt="${escapeHtml(image.name || character.name)}">`).join("") || "<div class=\"empty-state\"><span>画像未登録</span></div>"}
-      </div>
-    </section>
-    <section class="detail-section">
-      <h3>関係線</h3>
-      <div class="detail-relations">
-        ${renderDetailRelations(outgoing)}
-      </div>
-    </section>
+    ${detailSections.join("")}
   `;
 }
 
@@ -1476,7 +1524,7 @@ function renderDetailRelations(outgoing) {
   outgoing.forEach((relation) => {
     rows.push(`<div class="relation-row"><span><strong>${escapeHtml(relation.other?.name || "削除済み")}</strong> <span>${escapeHtml(relation.label)}</span></span></div>`);
   });
-  return rows.join("") || "<div class=\"empty-state\"><span>関係線未登録</span></div>";
+  return rows.join("");
 }
 
 function renderAffiliationFilter() {
@@ -1790,6 +1838,7 @@ function parseCharactersPayload(payload) {
   return sortByName(source.map((item) => normalizeCharacter({
     id: item.id || createId(),
     name: item.name || "名称未設定",
+    url: item.url || "",
     icon: item.icon || "",
     images: Array.isArray(item.images) ? item.images : [],
     description: item.description || "",
@@ -1803,6 +1852,7 @@ function normalizeCharacter(character) {
   return {
     id: character.id || createId(),
     name: character.name || "名称未設定",
+    url: character.url || "",
     icon: character.icon || "",
     images: (character.images || []).map((image) => ({
       id: image.id || createId(),

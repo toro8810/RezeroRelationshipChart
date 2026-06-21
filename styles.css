@@ -503,7 +503,7 @@ select:focus {
   background: #fdfbf7;
   box-shadow: var(--shadow);
   overscroll-behavior: contain;
-  touch-action: pan-x pan-y;
+  touch-action: none;
 }
 
 .chart-zoom-surface {
