@@ -17,6 +17,10 @@ const state = {
   detailOpen: false,
   chartAffiliationFilter: "all",
   chartFocus: null,
+  chartScale: 1,
+  chartPinch: null,
+  listControlsOpen: false,
+  listViewMode: "detail",
   crop: {
     image: null,
     scale: 1,
@@ -68,6 +72,8 @@ function bindElements() {
   els.relationLabel = document.getElementById("relation-label-input");
   els.addRelationBtn = document.getElementById("add-relation-btn");
   els.relationsList = document.getElementById("relations-list");
+  els.chartViewport = document.getElementById("chart-viewport");
+  els.chartZoomSurface = document.getElementById("chart-zoom-surface");
   els.chartBoard = document.getElementById("chart-board");
   els.fitChartBtn = document.getElementById("fit-chart-btn");
   els.chartAffiliationFilter = document.getElementById("chart-affiliation-filter");
@@ -78,6 +84,9 @@ function bindElements() {
   els.listSearch = document.getElementById("list-search-input");
   els.listAffiliation = document.getElementById("list-affiliation-filter");
   els.listSort = document.getElementById("list-sort-select");
+  els.listViewMode = document.getElementById("list-view-mode-select");
+  els.listControlsToggle = document.getElementById("list-controls-toggle");
+  els.listControlsPanel = document.getElementById("list-controls-panel");
   els.characterListView = document.getElementById("character-list-view");
   els.exportDataBtn = document.getElementById("export-data-btn");
   els.shareStatus = document.getElementById("share-status");
@@ -128,13 +137,23 @@ function bindEvents() {
   });
 
   els.addRelationBtn.addEventListener("click", addDraftRelation);
-  els.fitChartBtn.addEventListener("click", renderChart);
+  els.fitChartBtn.addEventListener("click", resetChartView);
+  els.chartViewport.addEventListener("wheel", handleChartWheel, { passive: false });
+  els.chartViewport.addEventListener("touchstart", startChartPinch, { passive: false });
+  els.chartViewport.addEventListener("touchmove", moveChartPinch, { passive: false });
+  els.chartViewport.addEventListener("touchend", endChartPinch);
+  els.chartViewport.addEventListener("touchcancel", endChartPinch);
   els.chartAffiliationFilter.addEventListener("change", () => {
     state.chartAffiliationFilter = els.chartAffiliationFilter.value;
     state.chartFocus = null;
     renderChart();
   });
   els.chartBoard.addEventListener("click", (event) => {
+    if (state.chartFocus && !event.target.closest(".chart-node")) {
+      state.chartFocus = null;
+      applyChartFocus();
+      return;
+    }
     const focusTarget = event.target.closest("[data-focus-type]");
     if (focusTarget) {
       state.chartFocus = {
@@ -162,6 +181,14 @@ function bindEvents() {
   els.listSearch.addEventListener("input", renderCharacterListView);
   els.listAffiliation.addEventListener("change", renderCharacterListView);
   els.listSort.addEventListener("change", renderCharacterListView);
+  els.listViewMode.addEventListener("change", () => {
+    state.listViewMode = els.listViewMode.value;
+    renderCharacterListView();
+  });
+  els.listControlsToggle.addEventListener("click", () => {
+    state.listControlsOpen = !state.listControlsOpen;
+    renderListControlsState();
+  });
   els.exportDataBtn.addEventListener("click", async () => {
     const saved = await saveDraftIfNeeded();
     if (!saved) return;
@@ -386,6 +413,7 @@ function renderAll() {
   renderRelationsEditor();
   renderChartAffiliationFilter();
   renderAffiliationFilter();
+  renderListControlsState();
   if (state.activeView === "chart") renderChart();
   if (state.detailOpen) renderDetail();
   if (state.activeView === "list") renderCharacterListView();
@@ -560,6 +588,9 @@ function renderChart() {
   if (chartCharacters.length === 0) {
     els.chartBoard.style.width = "100%";
     els.chartBoard.style.height = "560px";
+    els.chartBoard.style.transform = "none";
+    els.chartZoomSurface.style.width = "100%";
+    els.chartZoomSurface.style.height = "560px";
     els.chartBoard.appendChild(createEmptyState());
     return;
   }
@@ -567,6 +598,7 @@ function renderChart() {
   const layout = createChartLayout(chartCharacters);
   els.chartBoard.style.width = `${layout.width}px`;
   els.chartBoard.style.height = `${layout.height}px`;
+  applyChartScale(layout.width, layout.height);
 
   const frameSvg = createSvgElement("svg", {
     class: "chart-frame-svg",
@@ -628,6 +660,105 @@ function renderChart() {
     els.chartBoard.appendChild(card);
   });
   applyChartFocus();
+}
+
+function resetChartView() {
+  state.chartScale = 1;
+  state.chartFocus = null;
+  renderChart();
+  els.chartViewport.scrollLeft = 0;
+  els.chartViewport.scrollTop = 0;
+}
+
+function applyChartScale(width, height) {
+  if (width && height) {
+    els.chartBoard.dataset.baseWidth = String(width);
+    els.chartBoard.dataset.baseHeight = String(height);
+  }
+
+  const baseWidth = Number(els.chartBoard.dataset.baseWidth || width || 0);
+  const baseHeight = Number(els.chartBoard.dataset.baseHeight || height || 0);
+  if (!baseWidth || !baseHeight) return;
+
+  els.chartZoomSurface.style.width = `${baseWidth * state.chartScale}px`;
+  els.chartZoomSurface.style.height = `${baseHeight * state.chartScale}px`;
+  els.chartBoard.style.transform = `scale(${state.chartScale})`;
+}
+
+function setChartScale(nextScale, anchor = {}) {
+  const baseWidth = Number(els.chartBoard.dataset.baseWidth || 0);
+  const baseHeight = Number(els.chartBoard.dataset.baseHeight || 0);
+  if (!baseWidth || !baseHeight) return;
+
+  const viewport = els.chartViewport;
+  const currentScale = state.chartScale;
+  const viewportX = anchor.viewportX ?? viewport.clientWidth / 2;
+  const viewportY = anchor.viewportY ?? viewport.clientHeight / 2;
+  const contentX = anchor.contentX ?? (viewport.scrollLeft + viewportX) / currentScale;
+  const contentY = anchor.contentY ?? (viewport.scrollTop + viewportY) / currentScale;
+
+  state.chartScale = clamp(nextScale, 0.45, 2.8);
+  applyChartScale();
+  viewport.scrollLeft = contentX * state.chartScale - viewportX;
+  viewport.scrollTop = contentY * state.chartScale - viewportY;
+}
+
+function handleChartWheel(event) {
+  if (!event.ctrlKey && !event.metaKey) return;
+  event.preventDefault();
+  const rect = els.chartViewport.getBoundingClientRect();
+  const viewportX = event.clientX - rect.left;
+  const viewportY = event.clientY - rect.top;
+  const contentX = (els.chartViewport.scrollLeft + viewportX) / state.chartScale;
+  const contentY = (els.chartViewport.scrollTop + viewportY) / state.chartScale;
+  const factor = event.deltaY > 0 ? 0.9 : 1.1;
+  setChartScale(state.chartScale * factor, { contentX, contentY, viewportX, viewportY });
+}
+
+function startChartPinch(event) {
+  if (event.touches.length !== 2) return;
+  event.preventDefault();
+  const center = getTouchCenter(event.touches);
+  state.chartPinch = {
+    distance: getTouchDistance(event.touches),
+    scale: state.chartScale,
+    contentX: (els.chartViewport.scrollLeft + center.x) / state.chartScale,
+    contentY: (els.chartViewport.scrollTop + center.y) / state.chartScale
+  };
+}
+
+function moveChartPinch(event) {
+  if (!state.chartPinch || event.touches.length !== 2) return;
+  event.preventDefault();
+  const center = getTouchCenter(event.touches);
+  const distance = getTouchDistance(event.touches);
+  const ratio = distance / Math.max(1, state.chartPinch.distance);
+  setChartScale(state.chartPinch.scale * ratio, {
+    contentX: state.chartPinch.contentX,
+    contentY: state.chartPinch.contentY,
+    viewportX: center.x,
+    viewportY: center.y
+  });
+}
+
+function endChartPinch(event) {
+  if (event.touches?.length >= 2) return;
+  state.chartPinch = null;
+}
+
+function getTouchCenter(touches) {
+  const rect = els.chartViewport.getBoundingClientRect();
+  return {
+    x: ((touches[0].clientX + touches[1].clientX) / 2) - rect.left,
+    y: ((touches[0].clientY + touches[1].clientY) / 2) - rect.top
+  };
+}
+
+function getTouchDistance(touches) {
+  return Math.hypot(
+    touches[0].clientX - touches[1].clientX,
+    touches[0].clientY - touches[1].clientY
+  );
 }
 
 async function openCharacterEditor(characterId) {
@@ -896,7 +1027,9 @@ function drawAffiliationFrames(svg, layout, labelLayerItems) {
       "stroke-width": 2,
       opacity: 0.9,
       class: "chart-affiliation-frame",
-      "data-affiliation": group.name
+      "data-affiliation": group.name,
+      "data-focus-type": "affiliation",
+      "data-focus-id": group.name
     }));
 
     const labelWidth = Math.max(64, Math.min(group.width - 20, 220, group.name.length * 16 + 26));
@@ -1365,8 +1498,16 @@ function renderAffiliationFilter() {
   els.listAffiliation.value = [...els.listAffiliation.options].some((option) => option.value === current) ? current : "all";
 }
 
+function renderListControlsState() {
+  els.listControlsPanel.classList.toggle("is-collapsed", !state.listControlsOpen);
+  els.listControlsToggle.setAttribute("aria-expanded", String(state.listControlsOpen));
+  els.listControlsToggle.textContent = state.listControlsOpen ? "検索・表示 ▲" : "検索・表示 ▼";
+  els.listViewMode.value = state.listViewMode;
+}
+
 function renderCharacterListView() {
   renderAffiliationFilter();
+  renderListControlsState();
   const search = els.listSearch.value.trim().toLowerCase();
   const affiliation = els.listAffiliation.value;
   const sortMode = els.listSort.value;
@@ -1388,6 +1529,7 @@ function renderCharacterListView() {
   }
 
   els.characterListView.innerHTML = "";
+  els.characterListView.classList.toggle("icon-mode", state.listViewMode === "icon");
   if (characters.length === 0) {
     els.characterListView.appendChild(createEmptyState());
     return;
@@ -1396,6 +1538,19 @@ function renderCharacterListView() {
   characters.forEach((character) => {
     const button = document.createElement("button");
     button.type = "button";
+    if (state.listViewMode === "icon") {
+      button.className = "character-icon-cell";
+      button.innerHTML = `
+        ${renderImageTag(character.icon, "list-icon", character.name)}
+        <span class="list-name">${escapeHtml(character.name)}</span>
+      `;
+      button.addEventListener("click", async () => {
+        await openDetailDialog(character.id);
+      });
+      els.characterListView.appendChild(button);
+      return;
+    }
+
     button.className = "character-cell";
     button.innerHTML = `
       ${renderImageTag(character.icon, "list-icon", character.name)}
