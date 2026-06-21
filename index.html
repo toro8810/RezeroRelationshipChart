@@ -114,16 +114,19 @@
           <button type="button" id="fit-chart-btn" class="secondary-button">表示を整える</button>
         </div>
       </div>
-      <div class="chart-viewport">
-        <div id="chart-board" class="chart-board"></div>
+      <div id="chart-viewport" class="chart-viewport">
+        <div id="chart-zoom-surface" class="chart-zoom-surface">
+          <div id="chart-board" class="chart-board"></div>
+        </div>
       </div>
     </section>
 
     <section id="list-view" class="view" aria-labelledby="list-title">
       <div class="section-title">
         <h2 id="list-title">キャラ一覧</h2>
+        <button type="button" id="list-controls-toggle" class="secondary-button" aria-expanded="false">検索・表示 ▼</button>
       </div>
-      <div class="list-controls">
+      <div id="list-controls-panel" class="list-controls is-collapsed">
         <label class="field">
           <span>名前検索</span>
           <input id="list-search-input" type="search" autocomplete="off">
@@ -137,6 +140,13 @@
           <select id="list-sort-select">
             <option value="name">50音順</option>
             <option value="affiliation">所属順</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>表示</span>
+          <select id="list-view-mode-select">
+            <option value="detail">詳細表示</option>
+            <option value="icon">アイコン表示</option>
           </select>
         </label>
       </div>
