@@ -3,7 +3,10 @@ const STORAGE_KEY = "relationship-chart-data-v2";
 const LEGACY_DB_NAME = "relationship-chart-tool";
 const LEGACY_STORE_NAME = "characters";
 const BOARD_SIZE = { width: 2400, height: 1800 };
-const NODE_SIZE = { width: 116, height: 142 };
+const NODE_SIZE = { width: 116, height: 118 };
+const MIN_SCALE = 0.25;
+const MAX_SCALE = 1.4;
+const CROP_OUTPUT_SIZE = 512;
 const COLLATOR = new Intl.Collator("ja", { numeric: true, sensitivity: "base" });
 
 const DEFAULT_RELATION_TYPES = [
@@ -31,6 +34,7 @@ const state = {
   jsonFileHandle: null,
   scale: 1,
   characterEditingId: null,
+  characterCrop: null,
   termEditingId: null,
   dragging: null,
   justDragged: false,
@@ -107,6 +111,18 @@ function bindElements() {
   els.characterNameInput = document.getElementById("character-name-input");
   els.characterDisplayInput = document.getElementById("character-display-input");
   els.characterImageInput = document.getElementById("character-image-input");
+  els.characterImageFileInput = document.getElementById("character-image-file-input");
+  els.characterImageButton = document.getElementById("character-image-button");
+  els.characterImageClearButton = document.getElementById("character-image-clear-button");
+  els.characterImagePreview = document.getElementById("character-image-preview");
+  els.characterCropper = document.getElementById("character-cropper");
+  els.characterCropFrame = document.getElementById("character-crop-frame");
+  els.characterCropImage = document.getElementById("character-crop-image");
+  els.characterCropZoom = document.getElementById("character-crop-zoom");
+  els.characterCropX = document.getElementById("character-crop-x");
+  els.characterCropY = document.getElementById("character-crop-y");
+  els.characterCropApplyButton = document.getElementById("character-crop-apply-button");
+  els.characterCropCancelButton = document.getElementById("character-crop-cancel-button");
   els.characterUrlInput = document.getElementById("character-url-input");
   els.characterAffiliationsInput = document.getElementById("character-affiliations-input");
   els.characterTagsInput = document.getElementById("character-tags-input");
@@ -197,6 +213,15 @@ function bindEvents() {
   });
   els.newCharacterButton.addEventListener("click", startNewCharacter);
   els.deleteCharacterButton.addEventListener("click", deleteEditingCharacter);
+  els.characterImageButton.addEventListener("click", () => els.characterImageFileInput.click());
+  els.characterImageFileInput.addEventListener("change", handleCharacterImageFile);
+  els.characterImageClearButton.addEventListener("click", clearCharacterImage);
+  els.characterCropApplyButton.addEventListener("click", applyCharacterCrop);
+  els.characterCropCancelButton.addEventListener("click", closeCharacterCropper);
+  els.characterCropZoom.addEventListener("input", updateCharacterCropPreview);
+  els.characterCropX.addEventListener("input", updateCharacterCropPreview);
+  els.characterCropY.addEventListener("input", updateCharacterCropPreview);
+  els.characterCropFrame.addEventListener("pointerdown", startCharacterCropDrag);
 
   els.termForm.addEventListener("submit", (event) => {
     event.preventDefault();
@@ -780,7 +805,6 @@ function createCharacterNode(character) {
   node.innerHTML = `
     ${renderAvatar(character.image, "node-avatar", displayName(character))}
     <div class="node-name">${escapeHtml(displayName(character))}</div>
-    <div class="chip-row">${renderChips(character.tags, 2)}</div>
   `;
 
   node.addEventListener("pointerdown", (event) => startDrag(event, "character", character.id));
@@ -891,6 +915,10 @@ function applySelectionClasses() {
 
 function getRelatedEntities(entity) {
   const related = new Set();
+  const groupMemberIds = entity.type === "group" ? getGroupMemberIds(entity.id) : null;
+  if (groupMemberIds) {
+    groupMemberIds.forEach((id) => related.add(`character:${id}`));
+  }
   state.data.relationships.forEach((relationship) => {
     const fromKey = endpointKey(relationship.from);
     const toKey = endpointKey(relationship.to);
@@ -906,8 +934,27 @@ function getRelatedEntities(entity) {
       related.add(toKey);
       related.add(relKey);
     }
+    if (
+      groupMemberIds &&
+      relationship.from.type === "character" &&
+      relationship.to.type === "character" &&
+      groupMemberIds.has(relationship.from.id) &&
+      groupMemberIds.has(relationship.to.id)
+    ) {
+      related.add(fromKey);
+      related.add(toKey);
+      related.add(relKey);
+    }
   });
   return related;
+}
+
+function getGroupMemberIds(groupId) {
+  const group = getGroup(groupId);
+  if (!group) return new Set();
+  return new Set(getChartCharacters()
+    .filter((character) => character.affiliations.includes(group.name))
+    .map((character) => character.id));
 }
 
 function handleEntityClick(event, type, id) {
@@ -937,11 +984,7 @@ function handleEntityClick(event, type, id) {
     createRelationBetween(state.relationSource, target);
     return;
   }
-  if (!state.editMode && state.selected?.type === "character" && !(state.selected.type === type && state.selected.id === id)) {
-    clearSelection();
-    return;
-  }
-  selectEntity(type, id, true, type === "character");
+  selectEntity(type, id, false, type === "character");
 }
 
 function selectEntity(type, id, shouldScroll = true, openDetail = true) {
@@ -1485,6 +1528,157 @@ function renderCharacterForm() {
   els.characterDescriptionInput.value = item.description;
   els.characterMemoInput.value = item.memo;
   els.deleteCharacterButton.disabled = !character;
+  closeCharacterCropper();
+  renderCharacterImagePreview();
+}
+
+function renderCharacterImagePreview() {
+  const src = els.characterImageInput.value.trim();
+  els.characterImagePreview.innerHTML = src
+    ? `<img src="${escapeAttribute(src)}" alt="">`
+    : "<span>未設定</span>";
+  els.characterImageClearButton.disabled = !src;
+}
+
+function handleCharacterImageFile() {
+  const file = els.characterImageFileInput.files?.[0];
+  els.characterImageFileInput.value = "";
+  if (!file) return;
+  if (!file.type.startsWith("image/")) {
+    showToast("画像ファイルを選択してください。");
+    return;
+  }
+  const reader = new FileReader();
+  reader.addEventListener("load", () => openCharacterCropper(String(reader.result || "")));
+  reader.addEventListener("error", () => showToast("画像を読み込めませんでした。"));
+  reader.readAsDataURL(file);
+}
+
+function openCharacterCropper(src) {
+  if (!src) return;
+  els.characterCropper.hidden = false;
+  els.characterCropZoom.value = "1";
+  els.characterCropX.value = "0";
+  els.characterCropY.value = "0";
+  els.characterCropImage.onload = () => {
+    state.characterCrop = {
+      image: els.characterCropImage,
+      zoom: 1,
+      x: 0,
+      y: 0,
+      dragging: null
+    };
+    updateCharacterCropPreview();
+  };
+  els.characterCropImage.src = src;
+}
+
+function closeCharacterCropper() {
+  state.characterCrop = null;
+  if (els.characterCropper) els.characterCropper.hidden = true;
+  if (els.characterCropImage) {
+    els.characterCropImage.onload = null;
+    els.characterCropImage.removeAttribute("src");
+  }
+}
+
+function clearCharacterImage() {
+  els.characterImageInput.value = "";
+  closeCharacterCropper();
+  renderCharacterImagePreview();
+}
+
+function updateCharacterCropPreview() {
+  const crop = state.characterCrop;
+  if (!crop?.image?.naturalWidth) return;
+  const frame = getCropFrameMetrics();
+  crop.zoom = Number(els.characterCropZoom.value) || 1;
+  const maxX = Math.max(0, (frame.scaledWidth - frame.size) / 2);
+  const maxY = Math.max(0, (frame.scaledHeight - frame.size) / 2);
+  setRangeBounds(els.characterCropX, -maxX, maxX);
+  setRangeBounds(els.characterCropY, -maxY, maxY);
+  crop.x = clamp(Number(els.characterCropX.value) || 0, -maxX, maxX);
+  crop.y = clamp(Number(els.characterCropY.value) || 0, -maxY, maxY);
+  els.characterCropX.value = String(Math.round(crop.x));
+  els.characterCropY.value = String(Math.round(crop.y));
+  crop.image.style.width = `${frame.baseWidth}px`;
+  crop.image.style.height = `${frame.baseHeight}px`;
+  crop.image.style.transform = `translate(calc(-50% + ${crop.x}px), calc(-50% + ${crop.y}px)) scale(${crop.zoom})`;
+}
+
+function setRangeBounds(input, min, max) {
+  input.min = String(Math.round(min));
+  input.max = String(Math.round(max));
+  input.disabled = Math.round(max - min) === 0;
+}
+
+function startCharacterCropDrag(event) {
+  if (!state.characterCrop) return;
+  event.preventDefault();
+  els.characterCropFrame.setPointerCapture?.(event.pointerId);
+  state.characterCrop.dragging = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    cropX: Number(els.characterCropX.value) || 0,
+    cropY: Number(els.characterCropY.value) || 0
+  };
+  window.addEventListener("pointermove", moveCharacterCropDrag);
+  window.addEventListener("pointerup", stopCharacterCropDrag, { once: true });
+  window.addEventListener("pointercancel", stopCharacterCropDrag, { once: true });
+}
+
+function moveCharacterCropDrag(event) {
+  const drag = state.characterCrop?.dragging;
+  if (!drag || event.pointerId !== drag.pointerId) return;
+  els.characterCropX.value = String(drag.cropX + event.clientX - drag.startX);
+  els.characterCropY.value = String(drag.cropY + event.clientY - drag.startY);
+  updateCharacterCropPreview();
+}
+
+function stopCharacterCropDrag(event) {
+  if (state.characterCrop?.dragging?.pointerId === event.pointerId) {
+    state.characterCrop.dragging = null;
+  }
+  window.removeEventListener("pointermove", moveCharacterCropDrag);
+}
+
+function applyCharacterCrop() {
+  const crop = state.characterCrop;
+  if (!crop?.image?.naturalWidth) return;
+  updateCharacterCropPreview();
+  const frame = getCropFrameMetrics();
+  const scale = frame.baseScale * crop.zoom;
+  const left = frame.size / 2 + crop.x - frame.scaledWidth / 2;
+  const top = frame.size / 2 + crop.y - frame.scaledHeight / 2;
+  const sourceX = clamp(-left / scale, 0, crop.image.naturalWidth);
+  const sourceY = clamp(-top / scale, 0, crop.image.naturalHeight);
+  const sourceSize = Math.min(frame.size / scale, crop.image.naturalWidth - sourceX, crop.image.naturalHeight - sourceY);
+  const canvas = document.createElement("canvas");
+  canvas.width = CROP_OUTPUT_SIZE;
+  canvas.height = CROP_OUTPUT_SIZE;
+  const context = canvas.getContext("2d");
+  context.drawImage(crop.image, sourceX, sourceY, sourceSize, sourceSize, 0, 0, CROP_OUTPUT_SIZE, CROP_OUTPUT_SIZE);
+  els.characterImageInput.value = canvas.toDataURL("image/png");
+  closeCharacterCropper();
+  renderCharacterImagePreview();
+}
+
+function getCropFrameMetrics() {
+  const crop = state.characterCrop;
+  const size = els.characterCropFrame.clientWidth || 280;
+  const baseScale = Math.max(size / crop.image.naturalWidth, size / crop.image.naturalHeight);
+  const baseWidth = crop.image.naturalWidth * baseScale;
+  const baseHeight = crop.image.naturalHeight * baseScale;
+  const zoom = Number(els.characterCropZoom.value) || 1;
+  return {
+    size,
+    baseScale,
+    baseWidth,
+    baseHeight,
+    scaledWidth: baseWidth * zoom,
+    scaledHeight: baseHeight * zoom
+  };
 }
 
 function startNewCharacter() {
@@ -1860,7 +2054,7 @@ function pointerToBoard(event) {
 }
 
 function setScale(nextScale) {
-  state.scale = clamp(Number(nextScale.toFixed(2)), 0.5, 1.4);
+  state.scale = clamp(Number(nextScale.toFixed(2)), MIN_SCALE, MAX_SCALE);
   renderChart();
 }
 
@@ -1882,7 +2076,7 @@ function moveChartPinch(event) {
   event.preventDefault();
   const center = getTouchCenter(event.touches);
   const distance = getTouchDistance(event.touches);
-  const nextScale = clamp(state.chartPinch.scale * (distance / state.chartPinch.distance), 0.5, 1.4);
+  const nextScale = clamp(state.chartPinch.scale * (distance / state.chartPinch.distance), MIN_SCALE, MAX_SCALE);
   state.scale = Number(nextScale.toFixed(2));
   renderChart();
   els.chartViewport.scrollLeft = state.chartPinch.boardX * state.scale - center.x;
@@ -1914,8 +2108,7 @@ function fitChart(center = true) {
   if (!viewport?.clientWidth) return;
   const scaleX = viewport.clientWidth / BOARD_SIZE.width;
   const scaleY = viewport.clientHeight / BOARD_SIZE.height;
-  const minScale = viewport.clientWidth < 760 ? 0.55 : 0.65;
-  state.scale = clamp(Math.min(scaleX, scaleY, 1), minScale, 1);
+  state.scale = clamp(Math.min(scaleX, scaleY, 1), MIN_SCALE, 1);
   renderChart();
   if (center) {
     viewport.scrollLeft = Math.max(0, (BOARD_SIZE.width * state.scale - viewport.clientWidth) / 2);
