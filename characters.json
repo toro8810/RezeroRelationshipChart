@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "exportedAt": "2026-06-21T13:32:06.790Z",
+  "exportedAt": "2026-06-21T14:34:42.144Z",
   "characters": [
     {
       "id": "7bb89130-85ff-4b79-a6c7-0e3963cdd5c5",
@@ -54,8 +54,14 @@
         "3文字",
         "カタカナ"
       ],
-      "relationships": [],
-      "updatedAt": "2026-06-21T12:25:07.256Z"
+      "relationships": [
+        {
+          "id": "beaf162e-5aaf-452d-9bc3-93d510ed845f",
+          "targetId": "81da5f0f-6f07-41ad-91dc-00b62a8079cc",
+          "label": "ぽ"
+        }
+      ],
+      "updatedAt": "2026-06-21T14:34:36.005Z"
     },
     {
       "id": "353e0b8c-2574-4100-aa77-1b19d28115df",
