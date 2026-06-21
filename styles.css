@@ -57,17 +57,17 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 24px;
-  padding: 18px clamp(16px, 4vw, 44px);
+  gap: 14px;
+  padding: 10px clamp(12px, 3vw, 28px);
   border-bottom: 1px solid var(--line);
   background: rgba(255, 253, 249, 0.94);
   backdrop-filter: blur(14px);
 }
 
 .eyebrow {
-  margin: 0 0 3px;
+  margin: 0 0 1px;
   color: var(--accent-deep);
-  font-size: 0.76rem;
+  font-size: 0.68rem;
   font-weight: 700;
   text-transform: uppercase;
 }
@@ -81,7 +81,7 @@ p {
 
 h1 {
   margin-bottom: 0;
-  font-size: clamp(1.2rem, 2.5vw, 1.8rem);
+  font-size: clamp(1rem, 2vw, 1.35rem);
 }
 
 h2 {
@@ -96,20 +96,22 @@ h3 {
 
 .view-tabs {
   display: grid;
-  grid-template-columns: repeat(3, minmax(76px, 1fr));
-  gap: 6px;
-  padding: 4px;
+  grid-template-columns: repeat(3, minmax(58px, 1fr));
+  gap: 3px;
+  padding: 3px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: #eee8df;
 }
 
 .tab-button {
-  min-height: 38px;
+  min-height: 32px;
+  padding: 0 8px;
   border: 0;
   border-radius: 6px;
   background: transparent;
   color: var(--muted);
+  font-size: 0.9rem;
   font-weight: 700;
 }
 
@@ -502,8 +504,8 @@ select:focus {
   border-radius: var(--radius);
   background: #fdfbf7;
   box-shadow: var(--shadow);
-  overscroll-behavior: contain;
-  touch-action: none;
+  overscroll-behavior: auto;
+  touch-action: pan-x pan-y;
 }
 
 .chart-zoom-surface {
@@ -543,6 +545,15 @@ select:focus {
 .chart-label {
   cursor: pointer;
   pointer-events: auto;
+}
+
+.chart-relation-group {
+  cursor: pointer;
+  pointer-events: visiblePainted;
+}
+
+.chart-relation-hit {
+  pointer-events: stroke;
 }
 
 .chart-affiliation-frame {
@@ -900,6 +911,7 @@ select:focus {
 
   .app-header {
     display: grid;
+    gap: 8px;
   }
 
   .view-tabs {
@@ -920,8 +932,20 @@ select:focus {
 }
 
 @media (max-width: 560px) {
+  .app-header {
+    padding: 8px 10px;
+  }
+
+  .eyebrow {
+    font-size: 0.62rem;
+  }
+
+  h1 {
+    font-size: 1rem;
+  }
+
   .app-shell {
-    padding-inline: 12px;
+    padding: 14px 10px 32px;
   }
 
   .section-title,
@@ -931,12 +955,15 @@ select:focus {
   }
 
   .view-tabs {
-    gap: 4px;
+    gap: 2px;
+    padding: 2px;
   }
 
   .tab-button {
+    min-height: 28px;
     min-width: 0;
-    padding-inline: 6px;
+    padding-inline: 4px;
+    font-size: 0.82rem;
   }
 
   .character-cell {

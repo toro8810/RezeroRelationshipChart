@@ -17,11 +17,10 @@ const state = {
   detailOpen: false,
   chartAffiliationFilter: "all",
   chartFocus: null,
-  chartScale: 1,
+  chartScale: 0.8,
   chartPinch: null,
-  chartPan: null,
   listControlsOpen: false,
-  listViewMode: "detail",
+  listViewMode: "icon",
   crop: {
     image: null,
     scale: 1,
@@ -669,7 +668,7 @@ function renderChart() {
 }
 
 function resetChartView() {
-  state.chartScale = 1;
+  state.chartScale = 0.8;
   state.chartFocus = null;
   renderChart();
   els.chartViewport.scrollLeft = 0;
@@ -722,53 +721,35 @@ function handleChartWheel(event) {
 }
 
 function startChartPinch(event) {
-  if (event.touches.length === 1) {
-    state.chartPan = {
-      x: event.touches[0].clientX,
-      y: event.touches[0].clientY,
-      scrollLeft: els.chartViewport.scrollLeft,
-      scrollTop: els.chartViewport.scrollTop
-    };
-    return;
-  }
   if (event.touches.length === 2) {
     event.preventDefault();
-    state.chartPan = null;
+    const center = getTouchCenter(event.touches);
     state.chartPinch = {
-      distance: getTouchDistance(event.touches)
+      distance: getTouchDistance(event.touches),
+      scale: state.chartScale,
+      contentX: (els.chartViewport.scrollLeft + center.x) / state.chartScale,
+      contentY: (els.chartViewport.scrollTop + center.y) / state.chartScale
     };
   }
 }
 
 function moveChartPinch(event) {
-  if (event.touches.length === 1 && state.chartPan) {
-    event.preventDefault();
-    els.chartViewport.scrollLeft = state.chartPan.scrollLeft - (event.touches[0].clientX - state.chartPan.x);
-    els.chartViewport.scrollTop = state.chartPan.scrollTop - (event.touches[0].clientY - state.chartPan.y);
-    return;
-  }
-
   if (!state.chartPinch || event.touches.length !== 2) return;
   event.preventDefault();
   const center = getTouchCenter(event.touches);
   const distance = getTouchDistance(event.touches);
   const ratio = distance / Math.max(1, state.chartPinch.distance);
-  const contentX = (els.chartViewport.scrollLeft + center.x) / state.chartScale;
-  const contentY = (els.chartViewport.scrollTop + center.y) / state.chartScale;
-  setChartScale(state.chartScale * ratio, {
-    contentX,
-    contentY,
+  setChartScale(state.chartPinch.scale * ratio, {
+    contentX: state.chartPinch.contentX,
+    contentY: state.chartPinch.contentY,
     viewportX: center.x,
     viewportY: center.y
   });
-  state.chartPinch.distance = distance;
-  state.chartPinch.scale = state.chartScale;
 }
 
 function endChartPinch(event) {
   if (event.touches?.length >= 2) return;
   state.chartPinch = null;
-  if (!event.touches?.length) state.chartPan = null;
 }
 
 function getTouchCenter(touches) {
@@ -872,7 +853,7 @@ function applyChartFocus() {
 
   relationGroups.forEach((group) => {
     const keep = isAffiliationFocus
-      ? relatedCharacters.has(group.dataset.sourceId) || relatedCharacters.has(group.dataset.targetId)
+      ? relatedCharacters.has(group.dataset.sourceId) && relatedCharacters.has(group.dataset.targetId)
       : group.dataset.relationId === focus.id;
     group.classList.toggle("is-focused-item", keep);
     group.classList.toggle("is-dimmed", !keep);
@@ -886,7 +867,12 @@ function applyChartFocus() {
 
   labels.forEach((label) => {
     const keep = isAffiliationFocus
-      ? label.dataset.focusType === "affiliation" && label.dataset.focusId === focus.id
+      ? (label.dataset.focusType === "affiliation" && label.dataset.focusId === focus.id)
+        || (
+          label.dataset.focusType === "relationship"
+          && relatedCharacters.has(label.dataset.sourceId)
+          && relatedCharacters.has(label.dataset.targetId)
+        )
       : label.dataset.focusType === "relationship" && label.dataset.focusId === focus.id;
     label.classList.toggle("is-focused-item", keep);
     label.classList.toggle("is-dimmed", !keep);
@@ -1151,10 +1137,21 @@ function drawRelationshipLines(svg, layout, labelLayerItems) {
 
     const group = createSvgElement("g", {
       class: "chart-relation-group",
+      "data-focus-type": "relationship",
+      "data-focus-id": item.relationId,
       "data-relation-id": item.relationId,
       "data-source-id": item.source.id,
       "data-target-id": item.relation.targetId
     });
+    group.appendChild(createSvgElement("path", {
+      d: geometry.path,
+      fill: "none",
+      stroke: "transparent",
+      "stroke-width": 24,
+      "stroke-linecap": "round",
+      "pointer-events": "stroke",
+      class: "chart-relation-hit"
+    }));
     group.appendChild(createSvgElement("path", {
       d: geometry.path,
       fill: "none",
@@ -1181,6 +1178,8 @@ function drawRelationshipLines(svg, layout, labelLayerItems) {
       text: item.relation.label,
       x: geometry.labelX,
       y: geometry.labelY,
+      sourceId: item.source.id,
+      targetId: item.relation.targetId,
       color: "#27231f"
     });
   });
@@ -1214,6 +1213,8 @@ function drawChartLabels(svg, items, layout) {
       index
     );
     labelBox.relationId = item.id;
+    labelBox.sourceId = item.sourceId;
+    labelBox.targetId = item.targetId;
     blockers.push(labelBox);
     drawRelationshipLabel(svg, labelBox, item.text);
   });
@@ -1251,7 +1252,9 @@ function drawRelationshipLabel(svg, labelBox, text) {
   const group = createSvgElement("g", {
     class: "chart-label chart-relationship-label",
     "data-focus-type": "relationship",
-    "data-focus-id": labelBox.relationId
+    "data-focus-id": labelBox.relationId,
+    "data-source-id": labelBox.sourceId,
+    "data-target-id": labelBox.targetId
   });
   group.appendChild(createSvgElement("rect", {
     x: labelBox.x,
