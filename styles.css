@@ -502,12 +502,21 @@ select:focus {
   border-radius: var(--radius);
   background: #fdfbf7;
   box-shadow: var(--shadow);
+  overscroll-behavior: contain;
+  touch-action: pan-x pan-y;
+}
+
+.chart-zoom-surface {
+  position: relative;
+  min-width: 760px;
+  min-height: 560px;
 }
 
 .chart-board {
   position: relative;
   min-width: 760px;
   min-height: 560px;
+  transform-origin: 0 0;
 }
 
 .chart-frame-svg,
@@ -520,6 +529,7 @@ select:focus {
 
 .chart-frame-svg {
   z-index: 1;
+  pointer-events: auto;
 }
 
 .chart-lines-svg {
@@ -533,6 +543,11 @@ select:focus {
 .chart-label {
   cursor: pointer;
   pointer-events: auto;
+}
+
+.chart-affiliation-frame {
+  cursor: pointer;
+  pointer-events: visiblePainted;
 }
 
 .chart-node {
@@ -687,15 +702,24 @@ select:focus {
 
 .list-controls {
   display: grid;
-  grid-template-columns: minmax(180px, 1.3fr) minmax(160px, 1fr) minmax(140px, 0.8fr);
+  grid-template-columns: minmax(180px, 1.3fr) minmax(160px, 1fr) minmax(140px, 0.8fr) minmax(140px, 0.8fr);
   gap: 14px;
   margin-bottom: 16px;
   padding: 16px;
 }
 
+.list-controls.is-collapsed {
+  display: none;
+}
+
 .character-list-view {
   display: grid;
   gap: 10px;
+}
+
+.character-list-view.icon-mode {
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  align-items: start;
 }
 
 .character-cell {
@@ -709,10 +733,33 @@ select:focus {
   border-color: var(--accent);
 }
 
+.character-icon-cell {
+  display: grid;
+  justify-items: center;
+  align-content: start;
+  gap: 10px;
+  min-height: 142px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-strong);
+  color: var(--ink);
+  padding: 14px 10px;
+  text-align: center;
+}
+
+.character-icon-cell:hover {
+  border-color: var(--accent);
+}
+
 .list-icon {
   width: 56px;
   height: 56px;
   border-radius: 50%;
+}
+
+.icon-mode .list-icon {
+  width: 76px;
+  height: 76px;
 }
 
 .list-name {
@@ -721,6 +768,16 @@ select:focus {
   font-weight: 900;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.character-icon-cell .list-name {
+  display: -webkit-box;
+  width: 100%;
+  min-height: 40px;
+  white-space: normal;
+  line-height: 1.28;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .list-affiliations {
