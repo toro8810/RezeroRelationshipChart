@@ -2,7 +2,7 @@ const DEFAULT_DATA_URL = "characters.json";
 const STORAGE_KEY = "relationship-chart-data-v2";
 const LEGACY_DB_NAME = "relationship-chart-tool";
 const LEGACY_STORE_NAME = "characters";
-const BOARD_SIZE = { width: 1360, height: 860 };
+const BOARD_SIZE = { width: 2400, height: 1800 };
 const NODE_SIZE = { width: 116, height: 142 };
 const COLLATOR = new Intl.Collator("ja", { numeric: true, sensitivity: "base" });
 
@@ -25,6 +25,8 @@ const state = {
   selected: null,
   relationSource: null,
   relationTarget: null,
+  sidePanelOpen: false,
+  jsonFileHandle: null,
   scale: 1,
   characterEditingId: null,
   termEditingId: null,
@@ -61,9 +63,11 @@ function bindElements() {
   els.accessBadge = document.getElementById("access-badge");
   els.editToggleWrap = document.getElementById("edit-toggle-wrap");
   els.editToggle = document.getElementById("edit-toggle");
-  els.importLabel = document.getElementById("import-label");
+  els.importButton = document.getElementById("import-button");
   els.importInput = document.getElementById("import-input");
   els.exportButton = document.getElementById("export-button");
+  els.sidePanel = document.getElementById("side-panel");
+  els.sidePanelToggle = document.getElementById("side-panel-toggle");
   els.editOnly = Array.from(document.querySelectorAll(".edit-only"));
   els.chartSearch = document.getElementById("chart-search");
   els.searchResults = document.getElementById("search-results");
@@ -90,6 +94,7 @@ function bindElements() {
   els.zoomOutButton = document.getElementById("zoom-out-button");
   els.zoomInButton = document.getElementById("zoom-in-button");
   els.fitButton = document.getElementById("fit-button");
+  els.detailPanel = document.getElementById("detail-panel");
   els.clearSelectionButton = document.getElementById("clear-selection-button");
   els.detailContent = document.getElementById("detail-content");
   els.characterSearch = document.getElementById("character-search");
@@ -99,6 +104,7 @@ function bindElements() {
   els.characterNameInput = document.getElementById("character-name-input");
   els.characterDisplayInput = document.getElementById("character-display-input");
   els.characterImageInput = document.getElementById("character-image-input");
+  els.characterUrlInput = document.getElementById("character-url-input");
   els.characterAffiliationsInput = document.getElementById("character-affiliations-input");
   els.characterTagsInput = document.getElementById("character-tags-input");
   els.characterDescriptionInput = document.getElementById("character-description-input");
@@ -113,6 +119,7 @@ function bindElements() {
   els.termNameInput = document.getElementById("term-name-input");
   els.termCategoryInput = document.getElementById("term-category-input");
   els.termDescriptionInput = document.getElementById("term-description-input");
+  els.termUrlInput = document.getElementById("term-url-input");
   els.termMemoInput = document.getElementById("term-memo-input");
   els.newTermButton = document.getElementById("new-term-button");
   els.deleteTermButton = document.getElementById("delete-term-button");
@@ -134,6 +141,8 @@ function bindEvents() {
     renderAll();
   });
 
+  els.importButton.addEventListener("click", chooseJsonFile);
+  els.sidePanelToggle.addEventListener("click", toggleSidePanel);
   els.exportButton.addEventListener("click", exportJson);
   els.importInput.addEventListener("change", importJson);
   els.chartSearch.addEventListener("input", renderSearchResults);
@@ -159,11 +168,18 @@ function bindEvents() {
   els.zoomOutButton.addEventListener("click", () => setScale(state.scale - 0.1));
   els.zoomInButton.addEventListener("click", () => setScale(state.scale + 0.1));
   els.fitButton.addEventListener("click", fitChart);
+  els.chartBoard.addEventListener("click", (event) => {
+    if (!event.target.closest("[data-entity-type]")) {
+      clearSelection();
+    }
+  });
   els.clearSelectionButton.addEventListener("click", () => {
-    state.selected = null;
-    state.relationSource = null;
-    state.relationTarget = null;
-    renderAll();
+    clearSelection();
+  });
+  els.detailPanel.addEventListener("click", (event) => {
+    if (event.target === els.detailPanel) {
+      clearSelection();
+    }
   });
 
   els.characterForm.addEventListener("submit", (event) => {
@@ -193,12 +209,14 @@ function isLocalEditingHost() {
 function updateAccessUi() {
   els.accessBadge.textContent = state.canEdit ? "編集可能版" : "閲覧専用";
   els.editToggleWrap.hidden = !state.canEdit;
-  els.importLabel.hidden = !state.canEdit;
+  els.importButton.hidden = !state.canEdit;
   updateEditUi();
 }
 
 function updateEditUi() {
   els.editToggle.checked = state.editMode;
+  if (state.editMode) state.sidePanelOpen = true;
+  updateSidePanelUi();
   els.editOnly.forEach((el) => {
     el.hidden = !(state.canEdit && state.editMode);
   });
@@ -210,6 +228,16 @@ function updateEditUi() {
   const selectedExists = Boolean(state.selected);
   els.deleteSelectedButton.disabled = !(state.editMode && selectedExists);
   renderRelationDraftStatus();
+}
+
+function toggleSidePanel() {
+  state.sidePanelOpen = !state.sidePanelOpen;
+  updateSidePanelUi();
+}
+
+function updateSidePanelUi() {
+  els.sidePanel.classList.toggle("is-collapsed", !state.sidePanelOpen);
+  els.sidePanelToggle.setAttribute("aria-expanded", String(state.sidePanelOpen));
 }
 
 function setActiveTab(tab) {
@@ -341,10 +369,12 @@ function normalizeCharacter(character) {
     name,
     displayName,
     image: character?.image || character?.icon || "",
+    url: character?.url || "",
     description: character?.description || "",
     affiliations: cleanStringList(character?.affiliations),
     tags: cleanStringList(character?.tags),
     memo: character?.memo || "",
+    chartVisible: character?.chartVisible !== false,
     position: character?.position ? sanitizePosition(character.position) : null
   };
 }
@@ -492,6 +522,7 @@ function normalizeTerms(terms) {
     term: String(term.term || term.name || "名称未設定").trim() || "名称未設定",
     description: term.description || "",
     category: term.category || "その他",
+    url: term.url || "",
     memo: term.memo || ""
   })).sort((a, b) => COLLATOR.compare(a.term, b.term));
 }
@@ -520,14 +551,14 @@ function ensureDataLayout(data) {
     if (!group.size) {
       group.size = { width: 520, height: 230 };
     }
-    group.position.x = clamp(group.position.x, 20, BOARD_SIZE.width - 180);
-    group.position.y = clamp(group.position.y, 20, BOARD_SIZE.height - 140);
-    group.size.width = clamp(group.size.width, 240, 720);
-    group.size.height = clamp(group.size.height, 170, 520);
+    group.position.x = clamp(group.position.x, 0, BOARD_SIZE.width - 120);
+    group.position.y = clamp(group.position.y, 0, BOARD_SIZE.height - 100);
+    group.size.width = clamp(group.size.width, 240, 1200);
+    group.size.height = clamp(group.size.height, 170, 900);
   });
 
   const groupSlots = new Map();
-  data.characters.forEach((character, index) => {
+  getChartCharacters(data).forEach((character, index) => {
     if (data.layout.characters[character.id]) return;
     const group = findPrimaryGroup(character, data);
     if (group) {
@@ -546,10 +577,51 @@ function ensureDataLayout(data) {
     };
   });
 
-  data.characters.forEach((character) => {
+  getChartCharacters(data).forEach((character) => {
     const position = data.layout.characters[character.id];
-    position.x = clamp(position.x, 12, BOARD_SIZE.width - NODE_SIZE.width - 12);
-    position.y = clamp(position.y, 12, BOARD_SIZE.height - NODE_SIZE.height - 12);
+    position.x = clamp(position.x, 0, BOARD_SIZE.width - NODE_SIZE.width);
+    position.y = clamp(position.y, 0, BOARD_SIZE.height - NODE_SIZE.height);
+  });
+
+  autoShapeGroups(data);
+}
+
+function autoShapeGroups(data) {
+  data.groups.forEach((group) => {
+    const members = getChartCharacters(data).filter((character) => character.affiliations.includes(group.name));
+    if (!members.length) return;
+
+    const boxes = members
+      .map((character) => data.layout.characters[character.id])
+      .filter(Boolean)
+      .map((position) => ({
+        left: position.x,
+        top: position.y,
+        right: position.x + NODE_SIZE.width,
+        bottom: position.y + NODE_SIZE.height
+      }));
+    if (!boxes.length) return;
+
+    const paddingX = 46;
+    const paddingTop = 54;
+    const paddingBottom = 36;
+    const minWidth = group.size?.width || 260;
+    const minHeight = group.size?.height || 180;
+    const left = Math.min(...boxes.map((box) => box.left));
+    const top = Math.min(...boxes.map((box) => box.top));
+    const right = Math.max(...boxes.map((box) => box.right));
+    const bottom = Math.max(...boxes.map((box) => box.bottom));
+    const contentWidth = right - left + paddingX * 2;
+    const contentHeight = bottom - top + paddingTop + paddingBottom;
+
+    group.position = {
+      x: clamp(left - paddingX, 0, BOARD_SIZE.width - 120),
+      y: clamp(top - paddingTop, 0, BOARD_SIZE.height - 100)
+    };
+    group.size = {
+      width: clamp(Math.max(minWidth, contentWidth), 240, 1200),
+      height: clamp(Math.max(minHeight, contentHeight), 170, 900)
+    };
   });
 }
 
@@ -598,9 +670,11 @@ function renderRelationTypeOptions() {
 }
 
 function renderPlaceCharacterOptions() {
-  els.placeCharacterSelect.innerHTML = state.data.characters
+  const candidates = state.data.characters.filter((character) => !character.chartVisible);
+  els.placeCharacterSelect.innerHTML = candidates
     .map((character) => `<option value="${escapeHtml(character.id)}">${escapeHtml(displayName(character))}</option>`)
     .join("");
+  els.placeCharacterButton.disabled = !candidates.length;
 }
 
 function renderLegend() {
@@ -624,6 +698,7 @@ function renderChart() {
   els.chartBoard.style.height = `${BOARD_SIZE.height}px`;
   els.chartBoard.style.transform = `scale(${state.scale})`;
   els.chartBoard.classList.toggle("has-selection", Boolean(state.selected));
+  els.chartBoard.classList.toggle("has-relation-source", Boolean(state.relationSource));
   els.zoomLabel.textContent = `${Math.round(state.scale * 100)}%`;
   els.chartStatus.textContent = state.editMode ? `編集中：${state.tool === "move" ? "配置" : "関係線"}` : "閲覧モード";
 
@@ -637,9 +712,9 @@ function renderChart() {
   svg.appendChild(defs);
 
   state.data.groups.forEach((group) => els.chartBoard.appendChild(createGroupElement(group)));
-  state.data.relationships.forEach((relationship) => drawRelationship(svg, defs, relationship));
+  getChartRelationships().forEach((relationship) => drawRelationship(svg, defs, relationship));
   els.chartBoard.appendChild(svg);
-  state.data.characters.forEach((character) => els.chartBoard.appendChild(createCharacterNode(character)));
+  getChartCharacters().forEach((character) => els.chartBoard.appendChild(createCharacterNode(character)));
   applySelectionClasses();
 }
 
@@ -656,6 +731,9 @@ function createGroupElement(group) {
   box.classList.toggle("is-editing", state.editMode && state.tool === "move");
   if (isSelected("group", group.id)) box.classList.add("is-selected");
   if (isRelationSource("group", group.id)) box.classList.add("is-source");
+  if (state.relationSource && canConnectRelationTarget(state.relationSource, { type: "group", id: group.id })) {
+    box.classList.add("is-connectable");
+  }
 
   const label = document.createElement("div");
   label.className = "group-name";
@@ -679,11 +757,14 @@ function createCharacterNode(character) {
   node.classList.toggle("is-editing", state.editMode && state.tool === "move");
   if (isSelected("character", character.id)) node.classList.add("is-selected");
   if (isRelationSource("character", character.id)) node.classList.add("is-source");
+  if (state.relationSource && canConnectRelationTarget(state.relationSource, { type: "character", id: character.id })) {
+    node.classList.add("is-connectable");
+  }
 
   node.innerHTML = `
     ${renderAvatar(character.image, "node-avatar", displayName(character))}
     <div class="node-name">${escapeHtml(displayName(character))}</div>
-    <div class="chip-row">${renderChips(character.tags.length ? character.tags : character.affiliations, 2)}</div>
+    <div class="chip-row">${renderChips(character.tags, 2)}</div>
   `;
 
   node.addEventListener("pointerdown", (event) => startDrag(event, "character", character.id));
@@ -727,11 +808,11 @@ function drawRelationship(svg, defs, relationship) {
 
   hit.addEventListener("click", (event) => {
     event.stopPropagation();
-    selectEntity("relationship", relationship.id);
+    handleRelationshipClick(relationship.id);
   });
   path.addEventListener("click", (event) => {
     event.stopPropagation();
-    selectEntity("relationship", relationship.id);
+    handleRelationshipClick(relationship.id);
   });
 
   group.append(hit, path);
@@ -746,8 +827,16 @@ function drawRelationship(svg, defs, relationship) {
   label.style.top = `${mid.y}px`;
   label.style.color = relationship.color;
   label.textContent = relationship.label;
-  label.addEventListener("click", () => selectEntity("relationship", relationship.id));
+  label.addEventListener("click", () => handleRelationshipClick(relationship.id));
   els.chartBoard.appendChild(label);
+}
+
+function handleRelationshipClick(id) {
+  if (!state.editMode && state.selected?.type === "character") {
+    clearSelection();
+    return;
+  }
+  selectEntity("relationship", id);
 }
 
 function createArrowMarker(id, color) {
@@ -807,35 +896,64 @@ function handleEntityClick(event, type, id) {
   if (state.justDragged) return;
   if (state.editMode && state.tool === "relation") {
     if (!state.relationSource) {
+      if (type !== "character") return;
       state.relationSource = { type, id };
       state.relationTarget = null;
-      selectEntity(type, id, false);
-    } else if (state.relationSource.type === type && state.relationSource.id === id) {
+      state.selected = { type, id };
+      renderRelationDraftStatus();
+      renderChart();
+      return;
+    }
+    if (state.relationSource.type === type && state.relationSource.id === id) {
       state.relationSource = null;
       state.relationTarget = null;
       state.selected = null;
-    } else {
-      state.relationTarget = { type, id };
-      selectEntity(type, id, false);
+      renderRelationDraftStatus();
+      renderChart();
+      return;
     }
-    renderRelationDraftStatus();
-    renderChart();
+    const target = { type, id };
+    if (!canConnectRelationTarget(state.relationSource, target)) return;
+    createRelationBetween(state.relationSource, target);
+    return;
+  }
+  if (!state.editMode && state.selected?.type === "character" && !(state.selected.type === type && state.selected.id === id)) {
+    clearSelection();
     return;
   }
   selectEntity(type, id);
 }
 
-function selectEntity(type, id, shouldScroll = true) {
+function selectEntity(type, id, shouldScroll = true, openDetail = true) {
   state.selected = { type, id };
   if (type === "character") state.characterEditingId = id;
   if (type === "term") state.termEditingId = id;
-  renderDetail();
+  if (openDetail) renderDetail();
   renderCharacterForm();
   renderTermForm();
   renderChart();
   if (shouldScroll && (type === "character" || type === "group")) {
     scrollToEntity(type, id);
   }
+}
+
+function clearSelection() {
+  state.selected = null;
+  state.relationSource = null;
+  state.relationTarget = null;
+  closeDetail();
+  renderChart();
+  renderRelationDraftStatus();
+}
+
+function openDetail() {
+  els.detailPanel.classList.add("is-open");
+  els.detailPanel.setAttribute("aria-hidden", "false");
+}
+
+function closeDetail() {
+  els.detailPanel.classList.remove("is-open");
+  els.detailPanel.setAttribute("aria-hidden", "true");
 }
 
 function renderSearchResults() {
@@ -845,7 +963,7 @@ function renderSearchResults() {
     return;
   }
 
-  const characterMatches = state.data.characters
+  const characterMatches = getChartCharacters()
     .filter((character) => `${character.name} ${character.displayName}`.toLowerCase().includes(query))
     .map((character) => ({ type: "character", id: character.id, title: displayName(character), meta: "キャラ" }));
   const groupMatches = state.data.groups
@@ -871,11 +989,13 @@ function renderSearchResults() {
 }
 
 function renderDetail() {
-  const selected = state.selected || firstSelectableEntity();
+  const selected = state.selected;
   if (!selected) {
     els.detailContent.replaceChildren(createEmptyState());
+    closeDetail();
     return;
   }
+  openDetail();
   if (selected.type === "character") renderCharacterDetail(selected.id);
   if (selected.type === "group") renderGroupDetail(selected.id);
   if (selected.type === "relationship") renderRelationshipDetail(selected.id);
@@ -897,6 +1017,12 @@ function renderCharacterDetail(id) {
         <div class="chip-row">${renderChips(character.tags.concat(character.affiliations), 6)}</div>
       </div>
     </div>
+    ${character.url ? `
+      <section class="detail-section">
+        <h3>リンク</h3>
+        <p><a class="text-link" href="${escapeAttribute(character.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(character.url)}</a></p>
+      </section>
+    ` : ""}
     <section class="detail-section">
       <h3>説明</h3>
       <p>${escapeHtml(character.description || "未設定")}</p>
@@ -919,7 +1045,7 @@ function renderGroupDetail(id) {
     els.detailContent.replaceChildren(createEmptyState());
     return;
   }
-  const members = state.data.characters.filter((character) => character.affiliations.includes(group.name));
+  const members = getChartCharacters().filter((character) => character.affiliations.includes(group.name));
   els.detailContent.innerHTML = `
     <div class="detail-head">
       <div class="detail-avatar" style="color:${escapeHtml(group.color)};background:${escapeHtml(group.color)}22">${escapeHtml(group.name.slice(0, 2))}</div>
@@ -955,6 +1081,10 @@ function renderGroupEditFields(group) {
     <section class="detail-section editor-stack">
       <h3>編集</h3>
       <label class="field">
+        <span>グループ名</span>
+        <input id="detail-group-name" type="text" value="${escapeHtml(group.name)}">
+      </label>
+      <label class="field">
         <span>色</span>
         <input id="detail-group-color" type="color" value="${escapeHtml(group.color)}">
       </label>
@@ -982,13 +1112,22 @@ function renderGroupEditFields(group) {
 
 function bindGroupDetailInputs(group) {
   if (!state.editMode) return;
+  const name = document.getElementById("detail-group-name");
   const color = document.getElementById("detail-group-color");
   const width = document.getElementById("detail-group-width");
   const height = document.getElementById("detail-group-height");
   const description = document.getElementById("detail-group-description");
   const memo = document.getElementById("detail-group-memo");
-  [color, width, height, description, memo].forEach((input) => {
+  [name, color, width, height, description, memo].forEach((input) => {
     input?.addEventListener("change", () => {
+      const oldName = group.name;
+      const nextName = name.value.trim() || oldName;
+      group.name = nextName;
+      if (oldName !== nextName) {
+        state.data.characters.forEach((character) => {
+          character.affiliations = character.affiliations.map((affiliation) => affiliation === oldName ? nextName : affiliation);
+        });
+      }
       group.color = color.value;
       group.size.width = clamp(Number(width.value) || group.size.width, 240, 720);
       group.size.height = clamp(Number(height.value) || group.size.height, 170, 520);
@@ -1028,14 +1167,113 @@ function renderRelationshipDetail(id) {
     </section>
     ${state.editMode ? `
       <section class="detail-section editor-stack">
+        <h3>編集</h3>
+        <label class="field">
+          <span>関係設定</span>
+          <select id="detail-relation-type">
+            ${state.data.relationTypes.map((type) => `
+              <option value="${escapeHtml(type.id)}" ${type.id === relationship.relationTypeId ? "selected" : ""}>${escapeHtml(type.name)}</option>
+            `).join("")}
+          </select>
+        </label>
+        <label class="field">
+          <span>ラベル</span>
+          <input id="detail-relation-label" type="text" value="${escapeHtml(relationship.label)}">
+        </label>
+        <div class="form-grid compact">
+          <label class="field">
+            <span>色</span>
+            <input id="detail-relation-color" type="color" value="${escapeHtml(relationship.color)}">
+          </label>
+          <label class="field">
+            <span>線のタイプ</span>
+            <select id="detail-relation-line-type">
+              <option value="solid" ${relationship.lineType === "solid" ? "selected" : ""}>実線</option>
+              <option value="dashed" ${relationship.lineType === "dashed" ? "selected" : ""}>点線</option>
+              <option value="bold" ${relationship.lineType === "bold" ? "selected" : ""}>太線</option>
+            </select>
+          </label>
+        </div>
+        <label class="field">
+          <span>方向</span>
+          <select id="detail-relation-direction">
+            <option value="forward" ${relationship.direction === "forward" ? "selected" : ""}>A → B</option>
+            <option value="backward" ${relationship.direction === "backward" ? "selected" : ""}>A ← B</option>
+            <option value="both" ${relationship.direction === "both" ? "selected" : ""}>A ↔ B</option>
+            <option value="none" ${relationship.direction === "none" ? "selected" : ""}>方向なし</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>メモ</span>
+          <textarea id="detail-relation-memo" rows="3">${escapeHtml(relationship.memo)}</textarea>
+        </label>
         <button type="button" id="delete-relation-detail-button" class="danger-button">関係線を削除</button>
       </section>
     ` : ""}
   `;
+  bindRelationshipDetailInputs(relationship);
   document.getElementById("delete-relation-detail-button")?.addEventListener("click", () => {
     state.data.relationships = state.data.relationships.filter((item) => item.id !== id);
     state.selected = null;
     saveAndRender();
+  });
+}
+
+function bindRelationshipDetailInputs(relationship) {
+  if (!state.editMode) return;
+  const type = document.getElementById("detail-relation-type");
+  const label = document.getElementById("detail-relation-label");
+  const color = document.getElementById("detail-relation-color");
+  const lineType = document.getElementById("detail-relation-line-type");
+  const direction = document.getElementById("detail-relation-direction");
+  const memo = document.getElementById("detail-relation-memo");
+
+  type?.addEventListener("change", () => {
+    const nextType = state.data.relationTypes.find((item) => item.id === type.value);
+    if (!nextType) return;
+    relationship.relationTypeId = nextType.id;
+    relationship.label = nextType.name;
+    relationship.color = nextType.defaultColor;
+    relationship.lineType = nextType.defaultLineType;
+    saveAndRender();
+  });
+
+  label?.addEventListener("change", () => {
+    relationship.label = label.value.trim() || relationTypeName(relationship.relationTypeId);
+    saveAndRender();
+  });
+
+  color?.addEventListener("change", () => {
+    applyRelationStyleToType(relationship.relationTypeId, { color: color.value });
+    saveAndRender();
+  });
+
+  lineType?.addEventListener("change", () => {
+    applyRelationStyleToType(relationship.relationTypeId, { lineType: lineType.value });
+    saveAndRender();
+  });
+
+  direction?.addEventListener("change", () => {
+    relationship.direction = direction.value;
+    saveAndRender();
+  });
+
+  memo?.addEventListener("change", () => {
+    relationship.memo = memo.value.trim();
+    saveAndRender();
+  });
+}
+
+function applyRelationStyleToType(relationTypeId, patch) {
+  const relationType = state.data.relationTypes.find((item) => item.id === relationTypeId);
+  if (relationType) {
+    if (patch.color) relationType.defaultColor = patch.color;
+    if (patch.lineType) relationType.defaultLineType = patch.lineType;
+  }
+  state.data.relationships.forEach((relationship) => {
+    if (relationship.relationTypeId !== relationTypeId) return;
+    if (patch.color) relationship.color = patch.color;
+    if (patch.lineType) relationship.lineType = patch.lineType;
   });
 }
 
@@ -1063,7 +1301,7 @@ function bindRelationRows() {
 function renderCharacterGrid() {
   const query = els.characterSearch.value.trim().toLowerCase();
   const characters = state.data.characters
-    .filter((character) => `${character.name} ${character.displayName}`.toLowerCase().includes(query))
+    .filter((character) => `${character.name} ${character.displayName} ${character.url} ${character.affiliations.join(" ")} ${character.tags.join(" ")}`.toLowerCase().includes(query))
     .sort(compareByDisplayName);
 
   if (!characters.length) {
@@ -1100,6 +1338,7 @@ function renderCharacterForm() {
     name: "",
     displayName: "",
     image: "",
+    url: "",
     affiliations: [],
     tags: [],
     description: "",
@@ -1110,6 +1349,7 @@ function renderCharacterForm() {
   els.characterNameInput.value = item.name;
   els.characterDisplayInput.value = item.displayName === item.name ? "" : item.displayName;
   els.characterImageInput.value = item.image;
+  els.characterUrlInput.value = item.url;
   els.characterAffiliationsInput.value = item.affiliations.join(", ");
   els.characterTagsInput.value = item.tags.join(", ");
   els.characterDescriptionInput.value = item.description;
@@ -1133,10 +1373,12 @@ function saveCharacterForm() {
     name: els.characterNameInput.value.trim() || "名称未設定",
     displayName: els.characterDisplayInput.value.trim() || els.characterNameInput.value.trim() || "名称未設定",
     image: els.characterImageInput.value.trim(),
+    url: els.characterUrlInput.value.trim(),
     affiliations: splitInputList(els.characterAffiliationsInput.value),
     tags: splitInputList(els.characterTagsInput.value),
     description: els.characterDescriptionInput.value.trim(),
     memo: els.characterMemoInput.value.trim(),
+    chartVisible: existing ? existing.chartVisible : false,
     position: null
   };
 
@@ -1144,13 +1386,12 @@ function saveCharacterForm() {
     Object.assign(existing, character);
   } else {
     state.data.characters.push(character);
-    state.data.layout.characters[id] = viewportCenterPosition();
   }
 
   state.data.characters.sort(compareByDisplayName);
   ensureDataLayout(state.data);
   state.characterEditingId = id;
-  state.selected = { type: "character", id };
+  state.selected = character.chartVisible ? { type: "character", id } : null;
   saveAndRender();
   showToast("保存しました。");
 }
@@ -1182,7 +1423,7 @@ function renderTermList() {
   const query = els.termSearch.value.trim().toLowerCase();
   const category = els.termCategoryFilter.value;
   const terms = state.data.terms
-    .filter((term) => `${term.term} ${term.description}`.toLowerCase().includes(query))
+    .filter((term) => `${term.term} ${term.description} ${term.url}`.toLowerCase().includes(query))
     .filter((term) => category === "all" || term.category === category)
     .sort((a, b) => COLLATOR.compare(a.term, b.term));
 
@@ -1192,16 +1433,19 @@ function renderTermList() {
   }
 
   els.termList.innerHTML = terms.map((term) => `
-    <button type="button" class="term-card" data-id="${escapeHtml(term.id)}">
-      <span>
+    <div class="term-card" data-id="${escapeHtml(term.id)}">
+      <button type="button" class="term-main" data-id="${escapeHtml(term.id)}">
         <strong>${escapeHtml(term.term)}</strong>
         <p>${escapeHtml(term.description || "未設定")}</p>
+      </button>
+      <span class="term-card-actions">
+        <span class="category-pill">${escapeHtml(term.category || "その他")}</span>
+        ${term.url ? `<a class="text-link" href="${escapeAttribute(term.url)}" target="_blank" rel="noopener noreferrer">URL</a>` : ""}
       </span>
-      <span class="category-pill">${escapeHtml(term.category || "その他")}</span>
-    </button>
+    </div>
   `).join("");
 
-  els.termList.querySelectorAll(".term-card").forEach((button) => {
+  els.termList.querySelectorAll(".term-main").forEach((button) => {
     button.addEventListener("click", () => {
       state.termEditingId = button.dataset.id;
       renderTermForm();
@@ -1212,11 +1456,12 @@ function renderTermList() {
 function renderTermForm() {
   if (!state.canEdit || !state.editMode) return;
   const term = getTerm(state.termEditingId);
-  const item = term || { id: "", term: "", category: "", description: "", memo: "" };
+  const item = term || { id: "", term: "", category: "", description: "", url: "", memo: "" };
   els.termIdInput.value = item.id;
   els.termNameInput.value = item.term;
   els.termCategoryInput.value = item.category;
   els.termDescriptionInput.value = item.description;
+  els.termUrlInput.value = item.url || "";
   els.termMemoInput.value = item.memo;
   els.deleteTermButton.disabled = !term;
 }
@@ -1236,6 +1481,7 @@ function saveTermForm() {
     term: els.termNameInput.value.trim() || "名称未設定",
     category: els.termCategoryInput.value.trim() || "その他",
     description: els.termDescriptionInput.value.trim(),
+    url: els.termUrlInput.value.trim(),
     memo: els.termMemoInput.value.trim()
   };
   if (existing) {
@@ -1261,6 +1507,9 @@ function placeCharacterAtCenter() {
   if (!state.editMode) return;
   const id = els.placeCharacterSelect.value;
   if (!id) return;
+  const character = getCharacter(id);
+  if (!character) return;
+  character.chartVisible = true;
   state.data.layout.characters[id] = viewportCenterPosition();
   selectEntity("character", id);
   saveAndRender();
@@ -1295,8 +1544,13 @@ function deleteSelected() {
   if (!state.editMode || !state.selected) return;
   const { type, id } = state.selected;
   if (type === "character") {
-    state.characterEditingId = id;
-    deleteEditingCharacter();
+    const character = getCharacter(id);
+    if (character) character.chartVisible = false;
+    delete state.data.layout.characters[id];
+    state.selected = null;
+    state.relationSource = null;
+    state.relationTarget = null;
+    saveAndRender();
     return;
   }
   if (type === "group") {
@@ -1318,9 +1572,8 @@ function deleteSelected() {
 }
 
 function renderRelationDraftStatus() {
-  const source = state.relationSource ? entityLabel(state.relationSource) : "接続元を選択";
-  const target = state.relationTarget ? entityLabel(state.relationTarget) : "接続先を選択";
-  els.relationDraftStatus.textContent = state.relationSource ? `${source} → ${target}` : source;
+  const source = state.relationSource ? entityLabel(state.relationSource) : "基準キャラを選択";
+  els.relationDraftStatus.textContent = state.relationSource ? `${source} から伸ばす対象を選択` : source;
   els.createRelationButton.disabled = !(state.editMode && state.relationSource && state.relationTarget);
 }
 
@@ -1336,6 +1589,11 @@ function applyRelationTypeDefaults(shouldOverwriteLabel = true) {
 
 function createRelationFromDraft() {
   if (!state.editMode || !state.relationSource || !state.relationTarget) return;
+  createRelationBetween(state.relationSource, state.relationTarget);
+}
+
+function createRelationBetween(source, target) {
+  if (!state.editMode || !source || !target) return;
   let relationTypeId = els.relationTypeSelect.value;
   let label = els.relationLabelInput.value.trim();
   if (!label) label = relationTypeName(relationTypeId);
@@ -1355,8 +1613,8 @@ function createRelationFromDraft() {
 
   const relationship = {
     id: createId("relationship"),
-    from: { ...state.relationSource },
-    to: { ...state.relationTarget },
+    from: { ...source },
+    to: { ...target },
     relationTypeId,
     label,
     color: els.relationColorInput.value,
@@ -1372,6 +1630,26 @@ function createRelationFromDraft() {
   saveAndRender();
 }
 
+function canConnectRelationTarget(source, target) {
+  if (!source || !target || source.type !== "character") return false;
+  if (source.type === target.type && source.id === target.id) return false;
+  if (!entityVisibleOnChart(target)) return false;
+
+  const sourceCharacter = getCharacter(source.id);
+  if (!sourceCharacter || sourceCharacter.chartVisible === false) return false;
+  if (target.type === "group") {
+    const group = getGroup(target.id);
+    if (!group || sourceCharacter.affiliations.includes(group.name)) return false;
+  }
+
+  return !state.data.relationships.some((relationship) => (
+    relationship.from.type === source.type &&
+    relationship.from.id === source.id &&
+    relationship.to.type === target.type &&
+    relationship.to.id === target.id
+  ));
+}
+
 function startDrag(event, type, id) {
   if (!state.editMode || state.tool !== "move" || event.button !== 0) return;
   event.preventDefault();
@@ -1381,8 +1659,8 @@ function startDrag(event, type, id) {
   const group = type === "group" ? getGroup(id) : null;
   const memberPositions = {};
   if (group) {
-    state.data.characters.forEach((character) => {
-      if (character.affiliations.includes(group.name)) {
+    getChartCharacters().forEach((character) => {
+      if (character.affiliations.includes(group.name) && state.data.layout.characters[character.id]) {
         memberPositions[character.id] = { ...state.data.layout.characters[character.id] };
       }
     });
@@ -1488,9 +1766,31 @@ function scrollToEntity(type, id) {
   });
 }
 
-function exportJson() {
+async function exportJson() {
   const payload = createExportPayload(state.data);
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const text = JSON.stringify(payload, null, 2);
+  if (state.canEdit && "showSaveFilePicker" in window) {
+    try {
+      if (!state.jsonFileHandle) {
+        state.jsonFileHandle = await window.showSaveFilePicker({
+          suggestedName: "characters.json",
+          types: [{
+            description: "JSON",
+            accept: { "application/json": [".json"] }
+          }]
+        });
+      }
+      await writeJsonToHandle(state.jsonFileHandle, text);
+      showToast("ローカルJSONを上書きしました。");
+      return;
+    } catch (error) {
+      if (error?.name === "AbortError") return;
+      console.error(error);
+      showToast("直接上書きできなかったため、ダウンロードに切り替えます。");
+    }
+  }
+
+  const blob = new Blob([text], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
@@ -1502,19 +1802,37 @@ function exportJson() {
   showToast("JSONを書き出しました。");
 }
 
+async function chooseJsonFile() {
+  if (!state.canEdit) return;
+  if ("showOpenFilePicker" in window) {
+    try {
+      const [handle] = await window.showOpenFilePicker({
+        multiple: false,
+        types: [{
+          description: "JSON",
+          accept: { "application/json": [".json"] }
+        }]
+      });
+      state.jsonFileHandle = handle;
+      const file = await handle.getFile();
+      await applyJsonText(await file.text());
+      showToast(`${file.name} を読み込みました。`);
+      return;
+    } catch (error) {
+      if (error?.name === "AbortError") return;
+      console.error(error);
+    }
+  }
+  els.importInput.click();
+}
+
 async function importJson() {
   if (!state.canEdit) return;
   const file = els.importInput.files?.[0];
   if (!file) return;
   try {
-    const payload = JSON.parse(await file.text());
-    state.data = normalizeData(payload);
-    state.selected = firstSelectableEntity();
-    state.characterEditingId = state.data.characters[0]?.id || null;
-    state.termEditingId = state.data.terms[0]?.id || null;
-    persistData();
-    renderAll();
-    fitChart(false);
+    state.jsonFileHandle = null;
+    await applyJsonText(await file.text());
     showToast("JSONを読み込みました。");
   } catch (error) {
     console.error(error);
@@ -1522,6 +1840,23 @@ async function importJson() {
   } finally {
     els.importInput.value = "";
   }
+}
+
+async function applyJsonText(text) {
+  const payload = JSON.parse(text);
+  state.data = normalizeData(payload);
+  state.selected = null;
+  state.characterEditingId = state.data.characters[0]?.id || null;
+  state.termEditingId = state.data.terms[0]?.id || null;
+  persistData();
+  renderAll();
+  fitChart(false);
+}
+
+async function writeJsonToHandle(handle, text) {
+  const writable = await handle.createWritable();
+  await writable.write(text);
+  await writable.close();
 }
 
 function createExportPayload(data) {
@@ -1548,10 +1883,26 @@ function saveAndRender() {
 }
 
 function firstSelectableEntity() {
-  if (state.data.characters[0]) return { type: "character", id: state.data.characters[0].id };
+  if (getChartCharacters()[0]) return { type: "character", id: getChartCharacters()[0].id };
   if (state.data.groups[0]) return { type: "group", id: state.data.groups[0].id };
-  if (state.data.relationships[0]) return { type: "relationship", id: state.data.relationships[0].id };
+  if (getChartRelationships()[0]) return { type: "relationship", id: getChartRelationships()[0].id };
   return null;
+}
+
+function getChartCharacters(data = state.data) {
+  return data.characters.filter((character) => character.chartVisible !== false);
+}
+
+function getChartRelationships(data = state.data) {
+  return data.relationships.filter((relationship) => (
+    entityVisibleOnChart(relationship.from, data) &&
+    entityVisibleOnChart(relationship.to, data)
+  ));
+}
+
+function entityVisibleOnChart(endpoint, data = state.data) {
+  if (endpoint.type === "group") return data.groups.some((group) => group.id === endpoint.id);
+  return data.characters.some((character) => character.id === endpoint.id && character.chartVisible !== false);
 }
 
 function getCharacter(id) {
@@ -1572,6 +1923,8 @@ function getTerm(id) {
 
 function getEntityBounds(endpoint) {
   if (endpoint.type === "character") {
+    const character = getCharacter(endpoint.id);
+    if (!character || character.chartVisible === false) return null;
     const position = state.data.layout.characters[endpoint.id];
     if (!position) return null;
     return { x: position.x, y: position.y, width: NODE_SIZE.width, height: NODE_SIZE.height };
@@ -1606,7 +1959,7 @@ function isRelationSource(type, id) {
 }
 
 function getCharacterRelations(id) {
-  return state.data.relationships
+  return getChartRelationships()
     .filter((relationship) => (
       (relationship.from.type === "character" && relationship.from.id === id) ||
       (relationship.to.type === "character" && relationship.to.id === id)

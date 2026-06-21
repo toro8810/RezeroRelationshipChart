@@ -291,7 +291,8 @@ h3 {
 }
 
 #chart-view {
-  grid-template-columns: 274px minmax(0, 1fr) 330px;
+  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 0;
   height: calc(100vh - var(--header-height));
   min-height: 620px;
@@ -303,16 +304,47 @@ h3 {
 
 .side-panel,
 .detail-panel {
-  overflow: auto;
   background: var(--surface);
 }
 
 .side-panel {
-  border-right: 1px solid var(--line);
+  overflow: hidden;
+  border-right: 0;
+  border-bottom: 1px solid var(--line);
 }
 
-.detail-panel {
-  border-left: 1px solid var(--line);
+.side-panel:not(.is-collapsed) {
+  overflow: auto;
+  max-height: min(52vh, 430px);
+}
+
+.panel-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 46px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--blue-deep);
+  padding: 0 18px;
+  font-weight: 900;
+  text-align: left;
+}
+
+.panel-toggle::after {
+  content: "開く";
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.side-panel:not(.is-collapsed) .panel-toggle::after {
+  content: "閉じる";
+}
+
+.side-panel.is-collapsed .panel-block {
+  display: none;
 }
 
 .panel-block {
@@ -483,7 +515,8 @@ textarea:focus,
 }
 
 .legend-list {
-  display: grid;
+  display: flex;
+  flex-wrap: wrap;
   gap: 10px;
 }
 
@@ -514,6 +547,7 @@ textarea:focus,
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
   min-width: 0;
+  min-height: 0;
   background: #fbfdff;
 }
 
@@ -555,8 +589,8 @@ textarea:focus,
 
 .chart-board {
   position: relative;
-  width: 1360px;
-  height: 860px;
+  width: 2400px;
+  height: 1800px;
   transform-origin: 0 0;
 }
 
@@ -732,7 +766,8 @@ textarea:focus,
 }
 
 .chart-board.has-selection .is-related,
-.chart-board.has-selection .is-selected {
+.chart-board.has-selection .is-selected,
+.chart-board.has-selection .is-connectable {
   opacity: 1;
 }
 
@@ -753,7 +788,44 @@ textarea:focus,
   box-shadow: 0 0 0 4px rgba(139, 92, 246, 0.2), 0 14px 26px rgba(15, 23, 42, 0.12);
 }
 
+.chart-node.is-connectable,
+.group-box.is-connectable {
+  border-color: var(--green);
+  box-shadow: 0 0 0 4px rgba(22, 163, 74, 0.18), 0 14px 26px rgba(15, 23, 42, 0.12);
+}
+
+.chart-board.has-relation-source .chart-node:not(.is-source):not(.is-connectable),
+.chart-board.has-relation-source .group-box:not(.is-source):not(.is-connectable),
+.chart-board.has-relation-source .relation-label,
+.chart-board.has-relation-source .relation-path {
+  opacity: 0.16;
+}
+
 .detail-panel {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: none;
+  overflow: auto;
+  place-items: center;
+  padding: 22px;
+  border: 0;
+  background: rgba(15, 23, 42, 0.42);
+  backdrop-filter: blur(5px);
+}
+
+.detail-panel.is-open {
+  display: grid;
+}
+
+.detail-dialog {
+  width: min(680px, 100%);
+  max-height: calc(100vh - 44px);
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.22);
   padding: 18px;
 }
 
@@ -797,6 +869,16 @@ textarea:focus,
   margin-bottom: 0;
   color: #334155;
   line-height: 1.7;
+}
+
+.text-link {
+  color: var(--blue-deep);
+  font-weight: 900;
+  text-decoration: none;
+}
+
+.text-link:hover {
+  text-decoration: underline;
 }
 
 .relation-list {
@@ -947,6 +1029,20 @@ textarea:focus,
   text-align: left;
 }
 
+.term-main {
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+  text-align: left;
+}
+
+.term-card-actions {
+  display: grid;
+  justify-items: end;
+  gap: 8px;
+}
+
 .term-card strong {
   display: block;
   margin-bottom: 5px;
@@ -1029,15 +1125,8 @@ textarea:focus,
   }
 
   #chart-view {
-    grid-template-columns: 240px minmax(0, 1fr);
     height: auto;
     min-height: 0;
-  }
-
-  .detail-panel {
-    grid-column: 1 / -1;
-    border-top: 1px solid var(--line);
-    border-left: 0;
   }
 
   .canvas-panel {
@@ -1072,15 +1161,14 @@ textarea:focus,
     flex-wrap: wrap;
   }
 
-  #chart-view {
-    grid-template-columns: 1fr;
-  }
-
-  .side-panel,
-  .detail-panel {
+  .side-panel {
     max-height: none;
     border: 0;
     border-bottom: 1px solid var(--line);
+  }
+
+  .side-panel:not(.is-collapsed) {
+    max-height: none;
   }
 
   .canvas-panel {

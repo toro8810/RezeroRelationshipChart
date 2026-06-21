@@ -25,17 +25,16 @@
         <span>編集</span>
         <input id="edit-toggle" type="checkbox">
       </label>
-      <label id="import-label" class="ghost-button file-button" hidden>
-        JSON読込
-        <input id="import-input" type="file" accept="application/json,.json" hidden>
-      </label>
-      <button type="button" id="export-button" class="primary-button">JSON出力</button>
+      <button type="button" id="import-button" class="ghost-button file-button" hidden>JSON読込</button>
+      <input id="import-input" type="file" accept="application/json,.json" hidden>
+      <button type="button" id="export-button" class="primary-button">JSON上書き</button>
     </div>
   </header>
 
   <main class="app-main">
     <section id="chart-view" class="tab-view is-active" aria-labelledby="chart-heading">
-      <aside class="side-panel search-panel">
+      <aside id="side-panel" class="side-panel search-panel is-collapsed">
+        <button type="button" id="side-panel-toggle" class="panel-toggle" aria-expanded="false">検索・凡例・編集</button>
         <div class="panel-block">
           <h2 id="chart-heading">検索</h2>
           <label class="search-box">
@@ -102,7 +101,7 @@
                 <option value="none">方向なし</option>
               </select>
             </label>
-            <button type="button" id="create-relation-button" class="primary-button" disabled>関係線を作成</button>
+            <button type="button" id="create-relation-button" class="primary-button" disabled>対象選択で作成</button>
           </div>
         </div>
 
@@ -127,12 +126,14 @@
         </div>
       </section>
 
-      <aside class="detail-panel">
-        <div class="panel-title-row">
-          <h2>詳細</h2>
-          <button type="button" id="clear-selection-button" class="icon-button" aria-label="選択解除">×</button>
+      <aside id="detail-panel" class="detail-panel" aria-hidden="true">
+        <div class="detail-dialog" role="dialog" aria-modal="true" aria-labelledby="detail-modal-heading">
+          <div class="panel-title-row">
+            <h2 id="detail-modal-heading">詳細</h2>
+            <button type="button" id="clear-selection-button" class="icon-button" aria-label="閉じる">×</button>
+          </div>
+          <div id="detail-content" class="detail-content"></div>
         </div>
-        <div id="detail-content" class="detail-content"></div>
       </aside>
     </section>
 
@@ -169,6 +170,10 @@
             <label class="field">
               <span>画像</span>
               <input id="character-image-input" type="text" autocomplete="off" placeholder="画像URLまたはData URL">
+            </label>
+            <label class="field">
+              <span>URLリンク</span>
+              <input id="character-url-input" type="url" autocomplete="off" placeholder="https://example.com">
             </label>
             <div class="form-grid">
               <label class="field">
@@ -235,6 +240,10 @@
             <label class="field">
               <span>説明文</span>
               <textarea id="term-description-input" rows="5"></textarea>
+            </label>
+            <label class="field">
+              <span>URLリンク</span>
+              <input id="term-url-input" type="url" autocomplete="off" placeholder="https://example.com">
             </label>
             <label class="field">
               <span>メモ</span>
