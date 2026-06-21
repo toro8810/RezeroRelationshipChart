@@ -1,35 +1,36 @@
-const DB_NAME = "relationship-chart-tool";
-const DB_VERSION = 1;
-const STORE_NAME = "characters";
 const DEFAULT_DATA_URL = "characters.json";
-const ICON_OUTPUT_SIZE = 256;
+const STORAGE_KEY = "relationship-chart-data-v2";
+const LEGACY_DB_NAME = "relationship-chart-tool";
+const LEGACY_STORE_NAME = "characters";
+const BOARD_SIZE = { width: 1360, height: 860 };
+const NODE_SIZE = { width: 116, height: 142 };
 const COLLATOR = new Intl.Collator("ja", { numeric: true, sensitivity: "base" });
 
+const DEFAULT_RELATION_TYPES = [
+  { id: "trust", name: "信頼", defaultColor: "#2563eb", defaultLineType: "solid", description: "信頼・協力関係" },
+  { id: "enemy", name: "敵対", defaultColor: "#ef4444", defaultLineType: "solid", description: "敵対関係" },
+  { id: "family", name: "家族", defaultColor: "#8b5cf6", defaultLineType: "bold", description: "家族・血縁関係" },
+  { id: "love", name: "恋愛", defaultColor: "#ec4899", defaultLineType: "solid", description: "恋愛・好意" },
+  { id: "unknown", name: "不明", defaultColor: "#94a3b8", defaultLineType: "dashed", description: "不明・調査中" }
+];
+
+const GROUP_COLORS = ["#2563eb", "#8b5cf6", "#ef4444", "#16a34a", "#f59e0b", "#ec4899", "#0f766e"];
+
 const state = {
-  characters: [],
-  activeView: "chart",
-  editingId: null,
-  selectedId: null,
-  draftIcon: "",
-  draftImages: [],
-  draftRelations: [],
-  lastDraftSnapshot: "",
-  detailOpen: false,
-  chartAffiliationFilter: "all",
-  chartFocus: null,
-  chartScale: 0.8,
-  chartPinch: null,
-  listControlsOpen: false,
-  listViewMode: "icon",
-  crop: {
-    image: null,
-    scale: 1,
-    offsetX: 0,
-    offsetY: 0,
-    dragging: false,
-    lastX: 0,
-    lastY: 0
-  }
+  data: createEmptyData(),
+  activeTab: "chart",
+  canEdit: false,
+  editMode: false,
+  tool: "move",
+  selected: null,
+  relationSource: null,
+  relationTarget: null,
+  scale: 1,
+  characterEditingId: null,
+  termEditingId: null,
+  dragging: null,
+  justDragged: false,
+  toastTimer: null
 };
 
 const els = {};
@@ -38,1924 +39,1724 @@ document.addEventListener("DOMContentLoaded", init);
 
 async function init() {
   bindElements();
+  state.canEdit = isLocalEditingHost();
   bindEvents();
-  state.characters = await loadCharactersFromDefaultJson();
-  state.selectedId = state.characters[0]?.id || null;
-  resetForm();
+  updateAccessUi();
+  state.data = await loadInitialData();
+  ensureDataLayout(state.data);
+  state.selected = null;
+  state.characterEditingId = state.data.characters[0]?.id || null;
+  state.termEditingId = state.data.terms[0]?.id || null;
   renderAll();
-  showView("chart");
+  fitChart();
 }
 
 function bindElements() {
-  els.views = {
-    edit: document.getElementById("edit-view"),
-    chart: document.getElementById("chart-view"),
-    list: document.getElementById("list-view")
-  };
   els.tabs = Array.from(document.querySelectorAll(".tab-button"));
-  els.form = document.getElementById("character-form");
-  els.name = document.getElementById("name-input");
-  els.affiliations = document.getElementById("affiliations-input");
-  els.url = document.getElementById("url-input");
-  els.description = document.getElementById("description-input");
-  els.newBtn = document.getElementById("new-character-btn");
-  els.saveBtn = document.getElementById("save-character-btn");
-  els.deleteBtn = document.getElementById("delete-character-btn");
-  els.characterCount = document.getElementById("character-count");
-  els.editList = document.getElementById("edit-character-list");
-  els.iconInput = document.getElementById("icon-input");
-  els.chooseIconBtn = document.getElementById("choose-icon-btn");
-  els.iconPreview = document.getElementById("icon-preview");
-  els.imagesInput = document.getElementById("images-input");
-  els.chooseImagesBtn = document.getElementById("choose-images-btn");
-  els.editorGallery = document.getElementById("image-gallery-editor");
-  els.relationTarget = document.getElementById("relation-target-select");
-  els.relationLabel = document.getElementById("relation-label-input");
-  els.addRelationBtn = document.getElementById("add-relation-btn");
-  els.relationsList = document.getElementById("relations-list");
+  els.views = {
+    chart: document.getElementById("chart-view"),
+    characters: document.getElementById("characters-view"),
+    terms: document.getElementById("terms-view")
+  };
+  els.accessBadge = document.getElementById("access-badge");
+  els.editToggleWrap = document.getElementById("edit-toggle-wrap");
+  els.editToggle = document.getElementById("edit-toggle");
+  els.importLabel = document.getElementById("import-label");
+  els.importInput = document.getElementById("import-input");
+  els.exportButton = document.getElementById("export-button");
+  els.editOnly = Array.from(document.querySelectorAll(".edit-only"));
+  els.chartSearch = document.getElementById("chart-search");
+  els.searchResults = document.getElementById("search-results");
+  els.relationLegend = document.getElementById("relation-legend");
+  els.toolButtons = Array.from(document.querySelectorAll(".tool-button"));
+  els.placementEditor = document.getElementById("placement-editor");
+  els.relationEditor = document.getElementById("relation-editor");
+  els.placeCharacterSelect = document.getElementById("place-character-select");
+  els.placeCharacterButton = document.getElementById("place-character-button");
+  els.groupNameInput = document.getElementById("group-name-input");
+  els.addGroupButton = document.getElementById("add-group-button");
+  els.deleteSelectedButton = document.getElementById("delete-selected-button");
+  els.relationDraftStatus = document.getElementById("relation-draft-status");
+  els.relationTypeSelect = document.getElementById("relation-type-select");
+  els.relationLabelInput = document.getElementById("relation-label-input");
+  els.relationColorInput = document.getElementById("relation-color-input");
+  els.relationLineTypeSelect = document.getElementById("relation-line-type-select");
+  els.relationDirectionSelect = document.getElementById("relation-direction-select");
+  els.createRelationButton = document.getElementById("create-relation-button");
+  els.chartStatus = document.getElementById("chart-status");
   els.chartViewport = document.getElementById("chart-viewport");
-  els.chartZoomSurface = document.getElementById("chart-zoom-surface");
   els.chartBoard = document.getElementById("chart-board");
-  els.fitChartBtn = document.getElementById("fit-chart-btn");
-  els.chartAffiliationFilter = document.getElementById("chart-affiliation-filter");
-  els.detailModal = document.getElementById("detail-modal");
-  els.detailPanel = document.getElementById("detail-panel");
-  els.editSelectedBtn = document.getElementById("edit-selected-btn");
-  els.detailCloseBtn = document.getElementById("detail-close-btn");
-  els.listSearch = document.getElementById("list-search-input");
-  els.listAffiliation = document.getElementById("list-affiliation-filter");
-  els.listSort = document.getElementById("list-sort-select");
-  els.listViewMode = document.getElementById("list-view-mode-select");
-  els.listControlsToggle = document.getElementById("list-controls-toggle");
-  els.listControlsPanel = document.getElementById("list-controls-panel");
-  els.characterListView = document.getElementById("character-list-view");
-  els.exportDataBtn = document.getElementById("export-data-btn");
-  els.shareStatus = document.getElementById("share-status");
-  els.cropModal = document.getElementById("crop-modal");
-  els.cropCanvas = document.getElementById("crop-canvas");
-  els.cropScale = document.getElementById("crop-scale-input");
-  els.cropClose = document.getElementById("crop-close-btn");
-  els.cropCancel = document.getElementById("crop-cancel-btn");
-  els.cropSave = document.getElementById("crop-save-btn");
+  els.zoomLabel = document.getElementById("zoom-label");
+  els.zoomOutButton = document.getElementById("zoom-out-button");
+  els.zoomInButton = document.getElementById("zoom-in-button");
+  els.fitButton = document.getElementById("fit-button");
+  els.clearSelectionButton = document.getElementById("clear-selection-button");
+  els.detailContent = document.getElementById("detail-content");
+  els.characterSearch = document.getElementById("character-search");
+  els.characterGrid = document.getElementById("character-grid");
+  els.characterForm = document.getElementById("character-form");
+  els.characterIdInput = document.getElementById("character-id-input");
+  els.characterNameInput = document.getElementById("character-name-input");
+  els.characterDisplayInput = document.getElementById("character-display-input");
+  els.characterImageInput = document.getElementById("character-image-input");
+  els.characterAffiliationsInput = document.getElementById("character-affiliations-input");
+  els.characterTagsInput = document.getElementById("character-tags-input");
+  els.characterDescriptionInput = document.getElementById("character-description-input");
+  els.characterMemoInput = document.getElementById("character-memo-input");
+  els.newCharacterButton = document.getElementById("new-character-button");
+  els.deleteCharacterButton = document.getElementById("delete-character-button");
+  els.termSearch = document.getElementById("term-search");
+  els.termCategoryFilter = document.getElementById("term-category-filter");
+  els.termList = document.getElementById("term-list");
+  els.termForm = document.getElementById("term-form");
+  els.termIdInput = document.getElementById("term-id-input");
+  els.termNameInput = document.getElementById("term-name-input");
+  els.termCategoryInput = document.getElementById("term-category-input");
+  els.termDescriptionInput = document.getElementById("term-description-input");
+  els.termMemoInput = document.getElementById("term-memo-input");
+  els.newTermButton = document.getElementById("new-term-button");
+  els.deleteTermButton = document.getElementById("delete-term-button");
+  els.toast = document.getElementById("toast");
   els.emptyTemplate = document.getElementById("empty-template");
 }
 
 function bindEvents() {
   els.tabs.forEach((button) => {
-    button.addEventListener("click", () => requestViewChange(button.dataset.view));
+    button.addEventListener("click", () => setActiveTab(button.dataset.tab));
   });
 
-  els.form.addEventListener("submit", (event) => {
+  els.editToggle.addEventListener("change", () => {
+    if (!state.canEdit) return;
+    state.editMode = els.editToggle.checked;
+    state.relationSource = null;
+    state.relationTarget = null;
+    updateEditUi();
+    renderAll();
+  });
+
+  els.exportButton.addEventListener("click", exportJson);
+  els.importInput.addEventListener("change", importJson);
+  els.chartSearch.addEventListener("input", renderSearchResults);
+  els.characterSearch.addEventListener("input", renderCharacterGrid);
+  els.termSearch.addEventListener("input", renderTermList);
+  els.termCategoryFilter.addEventListener("change", renderTermList);
+
+  els.toolButtons.forEach((button) => {
+    button.addEventListener("click", () => {
+      state.tool = button.dataset.tool;
+      state.relationSource = null;
+      state.relationTarget = null;
+      updateEditUi();
+      renderChart();
+    });
+  });
+
+  els.placeCharacterButton.addEventListener("click", placeCharacterAtCenter);
+  els.addGroupButton.addEventListener("click", addGroupFromInput);
+  els.deleteSelectedButton.addEventListener("click", deleteSelected);
+  els.relationTypeSelect.addEventListener("change", applyRelationTypeDefaults);
+  els.createRelationButton.addEventListener("click", createRelationFromDraft);
+  els.zoomOutButton.addEventListener("click", () => setScale(state.scale - 0.1));
+  els.zoomInButton.addEventListener("click", () => setScale(state.scale + 0.1));
+  els.fitButton.addEventListener("click", fitChart);
+  els.clearSelectionButton.addEventListener("click", () => {
+    state.selected = null;
+    state.relationSource = null;
+    state.relationTarget = null;
+    renderAll();
+  });
+
+  els.characterForm.addEventListener("submit", (event) => {
     event.preventDefault();
-    saveCurrentCharacter();
+    saveCharacterForm();
   });
+  els.newCharacterButton.addEventListener("click", startNewCharacter);
+  els.deleteCharacterButton.addEventListener("click", deleteEditingCharacter);
 
-  els.newBtn.addEventListener("click", async () => {
-    const saved = await saveDraftIfNeeded();
-    if (!saved) return;
-    resetForm();
-    renderEditList();
+  els.termForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    saveTermForm();
   });
-
-  els.saveBtn.addEventListener("click", saveCurrentCharacter);
-  els.deleteBtn.addEventListener("click", deleteCurrentCharacter);
-  els.chooseIconBtn.addEventListener("click", () => els.iconInput.click());
-  els.chooseImagesBtn.addEventListener("click", () => els.imagesInput.click());
-
-  els.iconInput.addEventListener("change", async () => {
-    const file = els.iconInput.files[0];
-    if (!file) return;
-    await openCropper(file);
-    els.iconInput.value = "";
-  });
-
-  els.imagesInput.addEventListener("change", async () => {
-    const files = Array.from(els.imagesInput.files || []);
-    const images = await Promise.all(files.map(fileToImageRecord));
-    state.draftImages.push(...images);
-    els.imagesInput.value = "";
-    renderEditorGallery();
-  });
-
-  els.addRelationBtn.addEventListener("click", addDraftRelation);
-  els.fitChartBtn.addEventListener("click", resetChartView);
-  els.chartViewport.addEventListener("wheel", handleChartWheel, { passive: false });
-  els.chartViewport.addEventListener("touchstart", startChartPinch, { passive: false });
-  els.chartViewport.addEventListener("touchmove", moveChartPinch, { passive: false });
-  els.chartViewport.addEventListener("touchend", endChartPinch);
-  els.chartViewport.addEventListener("touchcancel", endChartPinch);
-  els.chartAffiliationFilter.addEventListener("change", () => {
-    state.chartAffiliationFilter = els.chartAffiliationFilter.value;
-    state.chartFocus = null;
-    renderChart();
-  });
-  els.chartBoard.addEventListener("click", (event) => {
-    if (state.chartFocus && !event.target.closest(".chart-node")) {
-      state.chartFocus = null;
-      applyChartFocus();
-      return;
-    }
-    const focusTarget = event.target.closest("[data-focus-type]");
-    if (focusTarget) {
-      state.chartFocus = {
-        type: focusTarget.dataset.focusType,
-        id: focusTarget.dataset.focusId
-      };
-      applyChartFocus();
-      return;
-    }
-    if (event.target.closest(".chart-node")) return;
-    state.chartFocus = null;
-    applyChartFocus();
-  });
-  els.editSelectedBtn.addEventListener("click", async () => {
-    const character = getSelectedCharacter();
-    if (!character) return;
-    closeDetailDialog();
-    await openCharacterEditor(character.id);
-  });
-  els.detailCloseBtn.addEventListener("click", closeDetailDialog);
-  els.detailModal.addEventListener("click", (event) => {
-    if (event.target === els.detailModal) closeDetailDialog();
-  });
-
-  els.listSearch.addEventListener("input", renderCharacterListView);
-  els.listAffiliation.addEventListener("change", renderCharacterListView);
-  els.listSort.addEventListener("change", renderCharacterListView);
-  els.listViewMode.addEventListener("change", () => {
-    state.listViewMode = els.listViewMode.value;
-    renderCharacterListView();
-  });
-  els.listControlsToggle.addEventListener("click", () => {
-    state.listControlsOpen = !state.listControlsOpen;
-    renderListControlsState();
-  });
-  els.exportDataBtn.addEventListener("click", async () => {
-    const saved = await saveDraftIfNeeded();
-    if (!saved) return;
-    await copyCharactersJson();
-  });
-
-  els.cropClose.addEventListener("click", closeCropper);
-  els.cropCancel.addEventListener("click", closeCropper);
-  els.cropSave.addEventListener("click", saveCroppedIcon);
-  els.cropScale.addEventListener("input", () => {
-    state.crop.scale = Number(els.cropScale.value);
-    constrainCropOffset();
-    drawCropCanvas();
-  });
-
-  els.cropCanvas.addEventListener("pointerdown", startCropDrag);
-  els.cropCanvas.addEventListener("pointermove", moveCropDrag);
-  els.cropCanvas.addEventListener("pointerup", endCropDrag);
-  els.cropCanvas.addEventListener("pointercancel", endCropDrag);
-  els.cropCanvas.addEventListener("wheel", zoomCropWithWheel, { passive: false });
+  els.newTermButton.addEventListener("click", startNewTerm);
+  els.deleteTermButton.addEventListener("click", deleteEditingTerm);
 
   window.addEventListener("resize", () => {
-    if (state.activeView === "chart") renderChart();
-  });
-  window.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && state.detailOpen) closeDetailDialog();
+    if (state.activeTab === "chart") fitChart(false);
   });
 }
 
-function openDatabase() {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(DB_NAME, DB_VERSION);
-    request.onupgradeneeded = () => {
-      const db = request.result;
-      if (!db.objectStoreNames.contains(STORE_NAME)) {
-        db.createObjectStore(STORE_NAME, { keyPath: "id" });
-      }
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
+function isLocalEditingHost() {
+  const host = window.location.hostname;
+  return window.location.protocol === "file:" || host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "";
+}
+
+function updateAccessUi() {
+  els.accessBadge.textContent = state.canEdit ? "編集可能版" : "閲覧専用";
+  els.editToggleWrap.hidden = !state.canEdit;
+  els.importLabel.hidden = !state.canEdit;
+  updateEditUi();
+}
+
+function updateEditUi() {
+  els.editToggle.checked = state.editMode;
+  els.editOnly.forEach((el) => {
+    el.hidden = !(state.canEdit && state.editMode);
   });
-}
-
-async function getAllCharacters() {
-  const db = await openDatabase();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, "readonly");
-    const request = tx.objectStore(STORE_NAME).getAll();
-    request.onsuccess = () => resolve(sortByName(request.result || []));
-    request.onerror = () => reject(request.error);
-    tx.oncomplete = () => db.close();
+  els.toolButtons.forEach((button) => {
+    button.classList.toggle("is-active", button.dataset.tool === state.tool);
   });
+  els.placementEditor.hidden = state.tool !== "move";
+  els.relationEditor.hidden = state.tool !== "relation";
+  const selectedExists = Boolean(state.selected);
+  els.deleteSelectedButton.disabled = !(state.editMode && selectedExists);
+  renderRelationDraftStatus();
 }
 
-async function putCharacter(character) {
-  const db = await openDatabase();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, "readwrite");
-    tx.objectStore(STORE_NAME).put(character);
-    tx.oncomplete = () => {
-      db.close();
-      resolve();
-    };
-    tx.onerror = () => {
-      db.close();
-      reject(tx.error);
-    };
-  });
-}
-
-async function removeCharacter(id) {
-  const db = await openDatabase();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, "readwrite");
-    tx.objectStore(STORE_NAME).delete(id);
-    tx.oncomplete = () => {
-      db.close();
-      resolve();
-    };
-    tx.onerror = () => {
-      db.close();
-      reject(tx.error);
-    };
-  });
-}
-
-async function replaceAllCharacters(characters) {
-  const db = await openDatabase();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(STORE_NAME, "readwrite");
-    const store = tx.objectStore(STORE_NAME);
-    store.clear();
-    characters.forEach((character) => store.put(character));
-    tx.oncomplete = () => {
-      db.close();
-      resolve();
-    };
-    tx.onerror = () => {
-      db.close();
-      reject(tx.error);
-    };
-  });
-}
-
-async function requestViewChange(view) {
-  if (view === state.activeView) return;
-  const saved = await saveDraftIfNeeded();
-  if (!saved) return;
-  closeDetailDialog();
-  if (view === "edit") resetForm();
-  showView(view);
-}
-
-function showView(view) {
-  state.activeView = view;
-  Object.entries(els.views).forEach(([key, element]) => {
-    element.classList.toggle("is-active", key === view);
-  });
-  els.tabs.forEach((button) => {
-    button.classList.toggle("active", button.dataset.view === view);
-  });
-
-  if (view === "chart") renderChart();
-  if (view === "list") renderCharacterListView();
-}
-
-async function saveCurrentCharacter() {
-  await saveDraft({ allowFallbackName: false });
-}
-
-async function saveDraftIfNeeded() {
-  if (state.activeView !== "edit") return true;
-  if (!state.editingId && !hasDraftContent()) return true;
-  if (getDraftSnapshot() === state.lastDraftSnapshot) return true;
-  return saveDraft({ allowFallbackName: true });
-}
-
-async function saveDraft({ allowFallbackName }) {
-  const name = els.name.value.trim();
-  if (!name && !allowFallbackName) {
-    els.name.focus();
-    return false;
-  }
-
-  const id = state.editingId || createId();
-  const character = {
-    id,
-    name: name || createUntitledName(id),
-    url: els.url.value.trim(),
-    icon: state.draftIcon,
-    images: state.draftImages,
-    description: els.description.value.trim(),
-    affiliations: parseAffiliations(els.affiliations.value),
-    relationships: cleanRelations(state.draftRelations),
-    updatedAt: new Date().toISOString()
-  };
-
-  await putCharacter(character);
-  state.characters = await getAllCharacters();
-  state.editingId = character.id;
-  state.selectedId = character.id;
-  loadCharacterIntoForm(getCharacterById(character.id) || character);
-  renderAll();
-  return true;
-}
-
-async function deleteCurrentCharacter() {
-  if (!state.editingId) return;
-  const character = getCharacterById(state.editingId);
-  if (!character) return;
-  const ok = window.confirm(`「${character.name}」を削除しますか？`);
-  if (!ok) return;
-
-  await removeCharacter(character.id);
-  const updatedCharacters = state.characters
-    .filter((item) => item.id !== character.id)
-    .map((item) => ({
-      ...item,
-      relationships: (item.relationships || []).filter((relation) => relation.targetId !== character.id)
-    }));
-  await Promise.all(updatedCharacters.map(putCharacter));
-  state.characters = await getAllCharacters();
-  state.selectedId = state.characters[0]?.id || null;
-  resetForm();
-  renderAll();
-}
-
-function resetForm() {
-  state.editingId = null;
-  state.draftIcon = "";
-  state.draftImages = [];
-  state.draftRelations = [];
-  els.form.reset();
-  els.iconPreview.removeAttribute("src");
-  els.deleteBtn.disabled = true;
-  renderEditorGallery();
-  renderRelationTargetOptions();
-  renderRelationsEditor();
-  markDraftClean();
-}
-
-function loadCharacterIntoForm(character) {
-  state.editingId = character.id;
-  state.draftIcon = character.icon || "";
-  state.draftImages = [...(character.images || [])];
-  state.draftRelations = [...(character.relationships || [])];
-  els.name.value = character.name || "";
-  els.url.value = character.url || "";
-  els.affiliations.value = (character.affiliations || []).join(", ");
-  els.description.value = character.description || "";
-  els.deleteBtn.disabled = false;
-  renderIconPreview();
-  renderEditorGallery();
-  renderRelationTargetOptions();
-  renderRelationsEditor();
-  markDraftClean();
-}
-
-function renderAll() {
-  renderEditList();
-  renderIconPreview();
-  renderEditorGallery();
-  renderRelationTargetOptions();
-  renderRelationsEditor();
-  renderChartAffiliationFilter();
-  renderAffiliationFilter();
-  renderListControlsState();
-  if (state.activeView === "chart") renderChart();
-  if (state.detailOpen) renderDetail();
-  if (state.activeView === "list") renderCharacterListView();
-}
-
-function hasDraftContent() {
-  return Boolean(
-    els.name.value.trim()
-    || els.url.value.trim()
-    || els.affiliations.value.trim()
-    || els.description.value.trim()
-    || state.draftIcon
-    || state.draftImages.length
-    || state.draftRelations.length
-  );
-}
-
-function getDraftSnapshot() {
-  return JSON.stringify({
-    id: state.editingId || null,
-    name: els.name.value.trim(),
-    url: els.url.value.trim(),
-    icon: state.draftIcon,
-    images: state.draftImages,
-    description: els.description.value.trim(),
-    affiliations: parseAffiliations(els.affiliations.value),
-    relationships: cleanRelations(state.draftRelations)
-  });
-}
-
-function markDraftClean() {
-  state.lastDraftSnapshot = getDraftSnapshot();
-}
-
-function createUntitledName(id) {
-  const base = "名称未設定";
-  const existing = new Set(
-    state.characters
-      .filter((character) => character.id !== id)
-      .map((character) => character.name)
-  );
-  if (!existing.has(base)) return base;
-  let index = 2;
-  while (existing.has(`${base}${index}`)) index += 1;
-  return `${base}${index}`;
-}
-
-function renderEditList() {
-  els.characterCount.textContent = String(state.characters.length);
-  els.editList.innerHTML = "";
-  if (state.characters.length === 0) {
-    els.editList.appendChild(createEmptyState());
-    return;
-  }
-
-  sortByName(state.characters).forEach((character) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "compact-item";
-    button.classList.toggle("active", character.id === state.editingId);
-    button.innerHTML = `
-        ${renderImageTag(character.icon, "thumb", character.name)}
-      <span>
-        <span class="compact-name">${escapeHtml(character.name)}</span>
-        <span class="compact-meta">${escapeHtml((character.affiliations || []).join(" / "))}</span>
-      </span>
-    `;
-    button.addEventListener("click", async () => {
-      if (character.id === state.editingId) return;
-      const saved = await saveDraftIfNeeded();
-      if (!saved) return;
-      state.editingId = character.id;
-      state.selectedId = character.id;
-      loadCharacterIntoForm(character);
-      renderEditList();
-    });
-    els.editList.appendChild(button);
-  });
-}
-
-function renderIconPreview() {
-  if (state.draftIcon) {
-    els.iconPreview.src = state.draftIcon;
-  } else {
-    els.iconPreview.removeAttribute("src");
+function setActiveTab(tab) {
+  state.activeTab = tab;
+  els.tabs.forEach((button) => button.classList.toggle("is-active", button.dataset.tab === tab));
+  Object.entries(els.views).forEach(([key, view]) => view.classList.toggle("is-active", key === tab));
+  if (tab === "chart") {
+    requestAnimationFrame(() => fitChart(false));
   }
 }
 
-function renderEditorGallery() {
-  els.editorGallery.innerHTML = "";
-  if (state.draftImages.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "empty-state";
-    empty.style.minHeight = "120px";
-    empty.innerHTML = "<span>画像未登録</span>";
-    els.editorGallery.appendChild(empty);
-    return;
-  }
-
-  state.draftImages.forEach((image) => {
-    const tile = document.createElement("div");
-    tile.className = "image-tile";
-    tile.innerHTML = `
-      <img src="${image.url}" alt="${escapeHtml(image.name || "")}">
-      <button type="button" class="image-remove" aria-label="画像を削除">×</button>
-    `;
-    tile.querySelector("button").addEventListener("click", () => {
-      state.draftImages = state.draftImages.filter((item) => item.id !== image.id);
-      renderEditorGallery();
-    });
-    els.editorGallery.appendChild(tile);
-  });
-}
-
-function renderRelationTargetOptions() {
-  els.relationTarget.innerHTML = "";
-  const candidates = sortByName(state.characters).filter((character) => character.id !== state.editingId);
-  if (candidates.length === 0) {
-    const option = new Option("相手なし", "");
-    els.relationTarget.appendChild(option);
-    els.relationTarget.disabled = true;
-    els.addRelationBtn.disabled = true;
-    return;
-  }
-  els.relationTarget.disabled = false;
-  els.addRelationBtn.disabled = false;
-  candidates.forEach((character) => {
-    els.relationTarget.appendChild(new Option(character.name, character.id));
-  });
-}
-
-function addDraftRelation() {
-  const targetId = els.relationTarget.value;
-  const label = els.relationLabel.value.trim();
-  if (!targetId || !label) {
-    els.relationLabel.focus();
-    return;
-  }
-  state.draftRelations.push({ id: createId(), targetId, label });
-  els.relationLabel.value = "";
-  renderRelationsEditor();
-}
-
-function renderRelationsEditor() {
-  els.relationsList.innerHTML = "";
-  if (state.draftRelations.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "empty-state";
-    empty.style.minHeight = "96px";
-    empty.innerHTML = "<span>関係線未登録</span>";
-    els.relationsList.appendChild(empty);
-    return;
-  }
-
-  state.draftRelations.forEach((relation) => {
-    const target = getCharacterById(relation.targetId);
-    const row = document.createElement("div");
-    row.className = "relation-row";
-    row.innerHTML = `
-      <span><strong>${escapeHtml(target?.name || "削除済み")}</strong> <span>${escapeHtml(relation.label)}</span></span>
-      <button type="button" class="secondary-button">削除</button>
-    `;
-    row.querySelector("button").addEventListener("click", () => {
-      state.draftRelations = state.draftRelations.filter((item) => item.id !== relation.id);
-      renderRelationsEditor();
-    });
-    els.relationsList.appendChild(row);
-  });
-}
-
-function renderChart() {
-  els.chartBoard.innerHTML = "";
-  const chartCharacters = getChartCharacters();
-  if (chartCharacters.length === 0) {
-    els.chartBoard.style.width = "100%";
-    els.chartBoard.style.height = "560px";
-    els.chartBoard.style.transform = "none";
-    els.chartZoomSurface.style.width = "100%";
-    els.chartZoomSurface.style.height = "560px";
-    els.chartBoard.appendChild(createEmptyState());
-    return;
-  }
-
-  const layout = createChartLayout(chartCharacters);
-  els.chartBoard.style.width = `${layout.width}px`;
-  els.chartBoard.style.height = `${layout.height}px`;
-  applyChartScale(layout.width, layout.height);
-
-  const frameSvg = createSvgElement("svg", {
-    class: "chart-frame-svg",
-    width: layout.width,
-    height: layout.height,
-    viewBox: `0 0 ${layout.width} ${layout.height}`
-  });
-  const labelLayerItems = [];
-  drawAffiliationFrames(frameSvg, layout, labelLayerItems);
-  els.chartBoard.appendChild(frameSvg);
-
-  const lineSvg = createSvgElement("svg", {
-    class: "chart-lines-svg",
-    width: layout.width,
-    height: layout.height,
-    viewBox: `0 0 ${layout.width} ${layout.height}`
-  });
-  lineSvg.appendChild(createArrowDefs());
-  drawRelationshipLines(lineSvg, layout, labelLayerItems);
-  els.chartBoard.appendChild(lineSvg);
-
-  const labelSvg = createSvgElement("svg", {
-    class: "chart-label-svg",
-    width: layout.width,
-    height: layout.height,
-    viewBox: `0 0 ${layout.width} ${layout.height}`
-  });
-  drawChartLabels(labelSvg, labelLayerItems, layout);
-  els.chartBoard.appendChild(labelSvg);
-
-  layout.nodes.forEach((node) => {
-    const character = node.character;
-    const card = document.createElement("article");
-    card.className = "chart-node";
-    card.dataset.characterId = character.id;
-    card.dataset.affiliations = (character.affiliations || []).join("\u001f");
-    card.setAttribute("role", "button");
-    card.setAttribute("tabindex", "0");
-    card.setAttribute("aria-label", `${character.name}の詳細`);
-    card.style.left = `${node.x}px`;
-    card.style.top = `${node.y}px`;
-    card.style.width = `${node.width}px`;
-    card.style.height = `${node.height}px`;
-    card.innerHTML = `
-      <button type="button" aria-label="${escapeHtml(character.name)}の詳細">
-        ${renderImageTag(character.icon, "chart-icon", character.name)}
-      </button>
-      <div class="chart-name">${escapeHtml(character.name)}</div>
-      <div class="affiliation-chips">${renderChips(character.affiliations)}</div>
-    `;
-    card.addEventListener("click", async () => {
-      await openDetailDialog(character.id);
-    });
-    card.addEventListener("keydown", async (event) => {
-      if (event.key !== "Enter" && event.key !== " ") return;
-      event.preventDefault();
-      await openDetailDialog(character.id);
-    });
-    els.chartBoard.appendChild(card);
-  });
-  applyChartFocus();
-}
-
-function resetChartView() {
-  state.chartScale = 0.8;
-  state.chartFocus = null;
-  renderChart();
-  els.chartViewport.scrollLeft = 0;
-  els.chartViewport.scrollTop = 0;
-}
-
-function applyChartScale(width, height) {
-  if (width && height) {
-    els.chartBoard.dataset.baseWidth = String(width);
-    els.chartBoard.dataset.baseHeight = String(height);
-  }
-
-  const baseWidth = Number(els.chartBoard.dataset.baseWidth || width || 0);
-  const baseHeight = Number(els.chartBoard.dataset.baseHeight || height || 0);
-  if (!baseWidth || !baseHeight) return;
-
-  els.chartZoomSurface.style.width = `${baseWidth * state.chartScale}px`;
-  els.chartZoomSurface.style.height = `${baseHeight * state.chartScale}px`;
-  els.chartBoard.style.transform = `scale(${state.chartScale})`;
-}
-
-function setChartScale(nextScale, anchor = {}) {
-  const baseWidth = Number(els.chartBoard.dataset.baseWidth || 0);
-  const baseHeight = Number(els.chartBoard.dataset.baseHeight || 0);
-  if (!baseWidth || !baseHeight) return;
-
-  const viewport = els.chartViewport;
-  const currentScale = state.chartScale;
-  const viewportX = anchor.viewportX ?? viewport.clientWidth / 2;
-  const viewportY = anchor.viewportY ?? viewport.clientHeight / 2;
-  const contentX = anchor.contentX ?? (viewport.scrollLeft + viewportX) / currentScale;
-  const contentY = anchor.contentY ?? (viewport.scrollTop + viewportY) / currentScale;
-
-  state.chartScale = clamp(nextScale, 0.45, 2.8);
-  applyChartScale();
-  viewport.scrollLeft = contentX * state.chartScale - viewportX;
-  viewport.scrollTop = contentY * state.chartScale - viewportY;
-}
-
-function handleChartWheel(event) {
-  if (!event.ctrlKey && !event.metaKey) return;
-  event.preventDefault();
-  const rect = els.chartViewport.getBoundingClientRect();
-  const viewportX = event.clientX - rect.left;
-  const viewportY = event.clientY - rect.top;
-  const contentX = (els.chartViewport.scrollLeft + viewportX) / state.chartScale;
-  const contentY = (els.chartViewport.scrollTop + viewportY) / state.chartScale;
-  const factor = event.deltaY > 0 ? 0.9 : 1.1;
-  setChartScale(state.chartScale * factor, { contentX, contentY, viewportX, viewportY });
-}
-
-function startChartPinch(event) {
-  if (event.touches.length === 2) {
-    event.preventDefault();
-    const center = getTouchCenter(event.touches);
-    state.chartPinch = {
-      distance: getTouchDistance(event.touches),
-      scale: state.chartScale,
-      contentX: (els.chartViewport.scrollLeft + center.x) / state.chartScale,
-      contentY: (els.chartViewport.scrollTop + center.y) / state.chartScale
-    };
-  }
-}
-
-function moveChartPinch(event) {
-  if (!state.chartPinch || event.touches.length !== 2) return;
-  event.preventDefault();
-  const center = getTouchCenter(event.touches);
-  const distance = getTouchDistance(event.touches);
-  const ratio = distance / Math.max(1, state.chartPinch.distance);
-  setChartScale(state.chartPinch.scale * ratio, {
-    contentX: state.chartPinch.contentX,
-    contentY: state.chartPinch.contentY,
-    viewportX: center.x,
-    viewportY: center.y
-  });
-}
-
-function endChartPinch(event) {
-  if (event.touches?.length >= 2) return;
-  state.chartPinch = null;
-}
-
-function getTouchCenter(touches) {
-  const rect = els.chartViewport.getBoundingClientRect();
-  return {
-    x: ((touches[0].clientX + touches[1].clientX) / 2) - rect.left,
-    y: ((touches[0].clientY + touches[1].clientY) / 2) - rect.top
-  };
-}
-
-function getTouchDistance(touches) {
-  return Math.hypot(
-    touches[0].clientX - touches[1].clientX,
-    touches[0].clientY - touches[1].clientY
-  );
-}
-
-async function openCharacterEditor(characterId) {
-  const saved = await saveDraftIfNeeded();
-  if (!saved) return;
-  const character = getCharacterById(characterId);
-  if (!character) return;
-  state.editingId = character.id;
-  state.selectedId = character.id;
-  loadCharacterIntoForm(character);
-  showView("edit");
-}
-
-async function openDetailDialog(characterId) {
-  const saved = await saveDraftIfNeeded();
-  if (!saved) return;
-  state.selectedId = characterId;
-  state.detailOpen = true;
-  renderDetail();
-  els.detailModal.classList.add("is-open");
-  els.detailModal.setAttribute("aria-hidden", "false");
-}
-
-function closeDetailDialog() {
-  if (!state.detailOpen) return;
-  state.detailOpen = false;
-  els.detailModal.classList.remove("is-open");
-  els.detailModal.setAttribute("aria-hidden", "true");
-}
-
-function getChartCharacters() {
-  if (state.chartAffiliationFilter === "all") return [...state.characters];
-  return state.characters.filter((character) => {
-    return (character.affiliations || []).includes(state.chartAffiliationFilter);
-  });
-}
-
-function renderChartAffiliationFilter() {
-  const current = state.chartAffiliationFilter || "all";
-  els.chartAffiliationFilter.innerHTML = "";
-  els.chartAffiliationFilter.appendChild(new Option("すべて", "all"));
-  getAllAffiliations().forEach((affiliation) => {
-    els.chartAffiliationFilter.appendChild(new Option(affiliation, affiliation));
-  });
-  state.chartAffiliationFilter = [...els.chartAffiliationFilter.options].some((option) => option.value === current)
-    ? current
-    : "all";
-  els.chartAffiliationFilter.value = state.chartAffiliationFilter;
-}
-
-function applyChartFocus() {
-  const focus = state.chartFocus;
-  els.chartBoard.classList.toggle("has-focus", Boolean(focus));
-
-  const nodes = Array.from(els.chartBoard.querySelectorAll(".chart-node"));
-  const relationGroups = Array.from(els.chartBoard.querySelectorAll(".chart-relation-group"));
-  const affiliationFrames = Array.from(els.chartBoard.querySelectorAll(".chart-affiliation-frame"));
-  const labels = Array.from(els.chartBoard.querySelectorAll(".chart-label"));
-  const focusedRelation = focus?.type === "relationship"
-    ? relationGroups.find((group) => group.dataset.relationId === focus.id)
-    : null;
-
-  if (!focus) {
-    [...nodes, ...relationGroups, ...affiliationFrames, ...labels].forEach((element) => {
-      element.classList.remove("is-dimmed", "is-focused-item");
-    });
-    return;
-  }
-
-  const isAffiliationFocus = focus.type === "affiliation";
-  const relatedCharacters = new Set();
-  if (isAffiliationFocus) {
-    state.characters.forEach((character) => {
-      if ((character.affiliations || []).includes(focus.id)) relatedCharacters.add(character.id);
-    });
-  }
-
-  nodes.forEach((node) => {
-    const keep = isAffiliationFocus
-      ? relatedCharacters.has(node.dataset.characterId)
-      : node.dataset.characterId === focusedRelation?.dataset.sourceId
-        || node.dataset.characterId === focusedRelation?.dataset.targetId;
-    node.classList.toggle("is-focused-item", keep);
-    node.classList.toggle("is-dimmed", !keep);
-  });
-
-  relationGroups.forEach((group) => {
-    const keep = isAffiliationFocus
-      ? relatedCharacters.has(group.dataset.sourceId) && relatedCharacters.has(group.dataset.targetId)
-      : group.dataset.relationId === focus.id;
-    group.classList.toggle("is-focused-item", keep);
-    group.classList.toggle("is-dimmed", !keep);
-  });
-
-  affiliationFrames.forEach((frame) => {
-    const keep = isAffiliationFocus ? frame.dataset.affiliation === focus.id : false;
-    frame.classList.toggle("is-focused-item", keep);
-    frame.classList.toggle("is-dimmed", !keep);
-  });
-
-  labels.forEach((label) => {
-    const keep = isAffiliationFocus
-      ? (label.dataset.focusType === "affiliation" && label.dataset.focusId === focus.id)
-        || (
-          label.dataset.focusType === "relationship"
-          && relatedCharacters.has(label.dataset.sourceId)
-          && relatedCharacters.has(label.dataset.targetId)
-        )
-      : label.dataset.focusType === "relationship" && label.dataset.focusId === focus.id;
-    label.classList.toggle("is-focused-item", keep);
-    label.classList.toggle("is-dimmed", !keep);
-  });
-}
-
-function createChartLayout(characters) {
-  const boardParent = els.chartBoard.parentElement;
-  const visibleWidth = Math.max(760, boardParent.clientWidth - 4);
-  const margin = 52;
-  const nodeWidth = 128;
-  const columnGap = 44;
-  const rowGap = 46;
-  const groupGap = 46;
-  const framePadX = 24;
-  const framePadTop = 50;
-  const framePadBottom = 30;
-  const groupLabelOffset = 48;
-  const innerWidth = visibleWidth - margin * 2 - framePadX * 2;
-  const columns = Math.max(2, Math.floor((innerWidth + columnGap) / (nodeWidth + columnGap)));
-  const contentWidth = margin * 2 + framePadX * 2 + columns * nodeWidth + (columns - 1) * columnGap;
-  const width = Math.max(visibleWidth, contentWidth);
-  const nodes = [];
-  const positions = new Map();
-  let y = margin;
-
-  const characterGroups = groupByPrimaryAffiliation(characters);
-  characterGroups.forEach((characters, groupName) => {
-    const sorted = sortByName(characters);
-    const rows = Math.ceil(sorted.length / columns);
-    const nodeStartY = y + (groupName ? groupLabelOffset : 0);
-    const groupNodes = [];
-    const rowHeights = Array.from({ length: rows }, (_, row) => {
-      const rowCharacters = sorted.slice(row * columns, row * columns + columns);
-      return Math.max(...rowCharacters.map(estimateChartNodeHeight));
-    });
-    const rowOffsets = rowHeights.map((_, row) => {
-      return rowHeights.slice(0, row).reduce((sum, height) => sum + height, 0) + row * rowGap;
-    });
-
-    sorted.forEach((character, index) => {
-      const column = index % columns;
-      const row = Math.floor(index / columns);
-      const x = margin + framePadX + column * (nodeWidth + columnGap);
-      const nodeY = nodeStartY + rowOffsets[row];
-      const nodeHeight = estimateChartNodeHeight(character);
-      const node = {
-        character,
-        x,
-        y: nodeY,
-        width: nodeWidth,
-        height: nodeHeight,
-        cx: x + nodeWidth / 2,
-        cy: nodeY + nodeHeight / 2
-      };
-      nodes.push(node);
-      groupNodes.push(node);
-      positions.set(character.id, node);
-    });
-
-    const maxY = groupNodes.length
-      ? Math.max(...groupNodes.map((node) => node.y + node.height)) + framePadBottom
-      : nodeStartY;
-    y = maxY + groupGap;
-  });
-
-  const frames = createAffiliationFrames(positions, width, characters);
-  const frameMaxY = frames.length
-    ? Math.max(...frames.map((frame) => frame.y + frame.height))
-    : 0;
-
-  return {
-    width,
-    height: Math.max(560, y + margin, frameMaxY + margin),
-    nodes,
-    positions,
-    frames
-  };
-}
-
-function estimateChartNodeHeight(character) {
-  const chipRows = estimateChipRows(character.affiliations || [], 112);
-  return 150 + chipRows * 22;
-}
-
-function estimateChipRows(items, availableWidth) {
-  if (!items?.length) return 0;
-  let rows = 1;
-  let rowWidth = 0;
-  items.forEach((item) => {
-    const chipWidth = Math.min(92, Math.max(42, String(item).length * 13 + 18));
-    const nextWidth = rowWidth === 0 ? chipWidth : rowWidth + 4 + chipWidth;
-    if (nextWidth <= availableWidth) {
-      rowWidth = nextWidth;
-    } else {
-      rows += 1;
-      rowWidth = chipWidth;
+async function loadInitialData() {
+  if (state.canEdit) {
+    const stored = loadStoredData();
+    if (stored) {
+      persistData(stored);
+      return stored;
     }
-  });
-  return rows;
-}
-
-function groupByPrimaryAffiliation(characters) {
-  const groups = new Map();
-  sortByName(characters).forEach((character) => {
-    const key = character.affiliations?.[0] || "";
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(character);
-  });
-  return new Map([...groups.entries()].sort(([a], [b]) => {
-    if (!a && !b) return 0;
-    if (!a) return 1;
-    if (!b) return -1;
-    return COLLATOR.compare(a, b);
-  }));
-}
-
-function createAffiliationFrames(positions, boardWidth, characters) {
-  const padX = 22;
-  const padTop = 64;
-  const padBottom = 24;
-  const labelHeight = 28;
-  return getAllAffiliations().map((affiliation, index) => {
-    const members = characters
-      .filter((character) => (character.affiliations || []).includes(affiliation))
-      .map((character) => positions.get(character.id))
-      .filter(Boolean);
-    if (!members.length) return null;
-
-    const offset = (index % 4) * 5;
-    const minX = Math.max(14, Math.min(...members.map((node) => node.x)) - padX - offset);
-    const minY = Math.max(14, Math.min(...members.map((node) => node.y)) - padTop - offset);
-    const maxX = Math.min(boardWidth - 14, Math.max(...members.map((node) => node.x + node.width)) + padX + offset);
-    const maxY = Math.max(...members.map((node) => node.y + node.height)) + padBottom + offset;
-    const labelWidth = Math.max(64, Math.min(maxX - minX - 20, 220, affiliation.length * 16 + 26));
-    const minFrameWidth = labelWidth + 24;
-    const width = Math.max(maxX - minX, minFrameWidth);
-    const x = Math.min(Math.max(14, minX), Math.max(14, boardWidth - width - 14));
-    return {
-      name: affiliation,
-      color: getAffiliationColor(index),
-      x,
-      y: minY,
-      width,
-      height: Math.max(maxY - minY, padTop + labelHeight + padBottom),
-      labelWidth
-    };
-  }).filter(Boolean).sort((a, b) => (b.width * b.height) - (a.width * a.height));
-}
-
-function getAffiliationColor(index) {
-  const colors = ["#217c73", "#c17c21", "#a84862", "#6856a3", "#386f9f", "#4d7f3f"];
-  return colors[index % colors.length];
-}
-
-function drawAffiliationFrames(svg, layout, labelLayerItems) {
-  layout.frames.forEach((group) => {
-    const color = group.color;
-
-    svg.appendChild(createSvgElement("rect", {
-      x: group.x,
-      y: group.y,
-      width: group.width,
-      height: group.height,
-      rx: 8,
-      fill: color,
-      "fill-opacity": 0.08,
-      stroke: color,
-      "stroke-width": 2,
-      opacity: 0.9,
-      class: "chart-affiliation-frame",
-      "data-affiliation": group.name,
-      "data-focus-type": "affiliation",
-      "data-focus-id": group.name
-    }));
-
-    labelLayerItems.push({
-      type: "affiliation",
-      text: group.name,
-      color,
-      frame: group,
-      width: group.labelWidth,
-      height: 28
-    });
-  });
-}
-
-function placeAffiliationLabel(item, boardWidth, boardHeight, blockers, index = 0) {
-  const frame = item.frame;
-  const width = item.width;
-  const height = item.height;
-  const candidates = [];
-  const left = frame.x + 10;
-  const right = frame.x + frame.width - width - 10;
-  const insideTop = frame.y + 9;
-  const insideMaxY = Math.min(frame.y + 78, frame.y + frame.height - height - 8);
-
-  for (let y = insideTop; y <= insideMaxY; y += 34) {
-    candidates.push({ x: left, y, width, height });
-    if (right > left + 8) candidates.push({ x: right, y, width, height });
   }
 
-  const normalized = candidates.map((candidate) => ({
-    ...candidate,
-    x: clamp(candidate.x, frame.x + 8, frame.x + frame.width - width - 8),
-    y: clamp(candidate.y, frame.y + 8, frame.y + frame.height - height - 8)
-  }));
-  const rotated = normalized.slice(index % normalized.length).concat(normalized.slice(0, index % normalized.length));
-  const clearCandidate = rotated.find((candidate) => !blockers.some((blocker) => boxesOverlap(candidate, blocker)));
-  if (clearCandidate) return clearCandidate;
-
-  return rotated
-    .map((candidate) => ({
-      candidate,
-      score: blockers.reduce((total, blocker) => total + getOverlapArea(candidate, blocker), 0)
-    }))
-    .sort((a, b) => a.score - b.score)[0].candidate;
-}
-
-function boxesOverlap(a, b) {
-  return a.x < b.x + b.width
-    && a.x + a.width > b.x
-    && a.y < b.y + b.height
-    && a.y + a.height > b.y;
-}
-
-function getOverlapArea(a, b) {
-  const width = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x));
-  const height = Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y));
-  return width * height;
-}
-
-function drawRelationshipLines(svg, layout, labelLayerItems) {
-  const relations = [];
-  const visibleIds = new Set(layout.nodes.map((node) => node.character.id));
-  layout.nodes.forEach((sourceNode) => {
-    const source = sourceNode.character;
-    const from = layout.positions.get(source.id);
-    if (!from) return;
-    (source.relationships || []).forEach((relation, index) => {
-      if (!visibleIds.has(relation.targetId)) return;
-      const to = layout.positions.get(relation.targetId);
-      if (!to || from === to) return;
-      relations.push({ source, relation, from, to, index, relationId: relation.id || `${source.id}-${relation.targetId}-${index}` });
-    });
-  });
-
-  const pairCounts = new Map();
-  relations.forEach((item) => {
-    const key = createRelationPairKey(item.source.id, item.relation.targetId);
-    pairCounts.set(key, (pairCounts.get(key) || 0) + 1);
-  });
-
-  const pairIndexes = new Map();
-  relations.forEach((item) => {
-    const key = createRelationPairKey(item.source.id, item.relation.targetId);
-    const pairIndex = pairIndexes.get(key) || 0;
-    pairIndexes.set(key, pairIndex + 1);
-    const pairCount = pairCounts.get(key) || 1;
-    const directionSign = item.source.id < item.relation.targetId ? 1 : -1;
-    const geometry = createRelationshipGeometry(item.from, item.to, layout.nodes, pairCount, pairIndex, directionSign);
-
-    const group = createSvgElement("g", {
-      class: "chart-relation-group",
-      "data-focus-type": "relationship",
-      "data-focus-id": item.relationId,
-      "data-relation-id": item.relationId,
-      "data-source-id": item.source.id,
-      "data-target-id": item.relation.targetId
-    });
-    group.appendChild(createSvgElement("path", {
-      d: geometry.path,
-      fill: "none",
-      stroke: "transparent",
-      "stroke-width": 24,
-      "stroke-linecap": "round",
-      "pointer-events": "stroke",
-      class: "chart-relation-hit"
-    }));
-    group.appendChild(createSvgElement("path", {
-      d: geometry.path,
-      fill: "none",
-      stroke: "#fffdf9",
-      "stroke-width": 7,
-      "stroke-linecap": "round",
-      opacity: 0.94
-    }));
-    group.appendChild(createSvgElement("path", {
-      d: geometry.path,
-      fill: "none",
-      stroke: "#2f5f83",
-      "stroke-width": 2.4,
-      "stroke-linecap": "round",
-      "marker-start": "url(#line-start-dot)",
-      "marker-end": "url(#arrow-head)",
-      opacity: 0.96
-    }));
-    svg.appendChild(group);
-
-    labelLayerItems.push({
-      type: "relationship",
-      id: item.relationId,
-      text: item.relation.label,
-      x: geometry.labelX,
-      y: geometry.labelY,
-      sourceId: item.source.id,
-      targetId: item.relation.targetId,
-      color: "#27231f"
-    });
-  });
-}
-
-function drawChartLabels(svg, items, layout) {
-  const blockers = layout.nodes.map((node) => ({
-    x: node.x - 8,
-    y: node.y - 8,
-    width: node.width + 16,
-    height: node.height + 16
-  }));
-  const affiliationLabelBlockers = [];
-
-  items.filter((item) => item.type === "affiliation").forEach((item, index) => {
-    const labelBox = placeAffiliationLabel(item, layout.width, layout.height, affiliationLabelBlockers, index);
-    const placedItem = { ...item, ...labelBox };
-    drawAffiliationLabel(svg, placedItem);
-    affiliationLabelBlockers.push(labelBox);
-    blockers.push(labelBox);
-  });
-
-  items.filter((item) => item.type === "relationship").forEach((item, index) => {
-    const labelBox = placeRelationshipLabel(
-      item.x,
-      item.y,
-      item.text,
-      layout.width,
-      layout.height,
-      blockers,
-      index
-    );
-    labelBox.relationId = item.id;
-    labelBox.sourceId = item.sourceId;
-    labelBox.targetId = item.targetId;
-    blockers.push(labelBox);
-    drawRelationshipLabel(svg, labelBox, item.text);
-  });
-}
-
-function drawAffiliationLabel(svg, item) {
-  const group = createSvgElement("g", {
-    class: "chart-label chart-affiliation-label",
-    "data-focus-type": "affiliation",
-    "data-focus-id": item.text
-  });
-  group.appendChild(createSvgElement("rect", {
-    x: item.x,
-    y: item.y,
-    width: item.width,
-    height: item.height,
-    rx: 6,
-    fill: "#fffdf9",
-    stroke: item.color,
-    "stroke-width": 1.4,
-    opacity: 0.98
-  }));
-
-  group.appendChild(createSvgElement("text", {
-    x: item.x + 10,
-    y: item.y + 20,
-    fill: item.color,
-    "font-size": 15,
-    "font-weight": 800
-  }, item.text));
-  svg.appendChild(group);
-}
-
-function drawRelationshipLabel(svg, labelBox, text) {
-  const group = createSvgElement("g", {
-    class: "chart-label chart-relationship-label",
-    "data-focus-type": "relationship",
-    "data-focus-id": labelBox.relationId,
-    "data-source-id": labelBox.sourceId,
-    "data-target-id": labelBox.targetId
-  });
-  group.appendChild(createSvgElement("rect", {
-    x: labelBox.x,
-    y: labelBox.y,
-    width: labelBox.width,
-    height: labelBox.height,
-    rx: 5,
-    fill: "#fffdf9",
-    stroke: "#2f5f83",
-    "stroke-width": 1.2,
-    opacity: 0.98
-  }));
-  group.appendChild(createSvgElement("text", {
-    x: labelBox.x + labelBox.width / 2,
-    y: labelBox.y + 17,
-    fill: "#27231f",
-    "font-size": 13,
-    "font-weight": 800,
-    "text-anchor": "middle"
-  }, text));
-  svg.appendChild(group);
-}
-
-function createRelationPairKey(sourceId, targetId) {
-  return [sourceId, targetId].sort().join("::");
-}
-
-function createRelationshipGeometry(from, to, nodes, pairCount, pairIndex, directionSign = 1) {
-  const start = getNodeEdgePoint(from, to);
-  const end = getNodeEdgePoint(to, from);
-  const dx = end.x - start.x;
-  const dy = end.y - start.y;
-  const length = Math.max(1, Math.hypot(dx, dy));
-  const normalX = -dy / length;
-  const normalY = dx / length;
-  const routeNormalX = normalX * directionSign;
-  const routeNormalY = normalY * directionSign;
-  const spread = pairCount > 1 ? 56 : 0;
-  const stackedOffset = pairCount > 1
-    ? ((pairIndex - (pairCount - 1) / 2) * spread)
-    : 0;
-  const hasObstacle = segmentHitsAnotherNode(start, end, nodes, from, to);
-  const needsCurve = pairCount > 1 || hasObstacle;
-  const bend = needsCurve
-    ? (stackedOffset || 54)
-    : 0;
-  const startX = start.x + routeNormalX * stackedOffset * 0.12;
-  const startY = start.y + routeNormalY * stackedOffset * 0.12;
-  const endX = end.x + routeNormalX * stackedOffset * 0.12;
-  const endY = end.y + routeNormalY * stackedOffset * 0.12;
-
-  if (!needsCurve) {
-    return {
-      path: `M ${startX} ${startY} L ${endX} ${endY}`,
-      labelX: startX + dx * 0.5,
-      labelY: startY + dy * 0.5 - 18
-    };
+  if (window.location.protocol !== "file:") {
+    try {
+      const response = await fetch(`${DEFAULT_DATA_URL}?t=${Date.now()}`, { cache: "no-store" });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = normalizeData(await response.json());
+      if (state.canEdit) persistData(data);
+      return data;
+    } catch (error) {
+      console.error(error);
+    }
   }
 
-  const controlX = startX + dx * 0.5 + routeNormalX * bend;
-  const controlY = startY + dy * 0.5 + routeNormalY * bend;
-  return {
-    path: `M ${startX} ${startY} Q ${controlX} ${controlY} ${endX} ${endY}`,
-    labelX: controlX,
-    labelY: controlY - 18
-  };
-}
-
-function placeRelationshipLabel(centerX, centerY, text, boardWidth, boardHeight, placedLabels, index = 0) {
-  const width = Math.min(180, Math.max(42, String(text).length * 13 + 20));
-  const height = 24;
-  const offsets = [
-    [0, -22],
-    [0, 22],
-    [58, -2],
-    [-58, -2],
-    [76, -34],
-    [-76, -34],
-    [76, 34],
-    [-76, 34],
-    [0, -62],
-    [0, 62],
-    [116, 0],
-    [-116, 0],
-    [118, -58],
-    [-118, -58],
-    [118, 58],
-    [-118, 58]
-  ];
-  const rotatedOffsets = offsets.slice(index % offsets.length).concat(offsets.slice(0, index % offsets.length));
-  const candidates = rotatedOffsets.map(([offsetX, offsetY]) => ({
-    x: clamp(centerX - width / 2 + offsetX, 8, boardWidth - width - 8),
-    y: clamp(centerY - height / 2 + offsetY, 8, boardHeight - height - 8),
-    width,
-    height
-  }));
-
-  const clearCandidate = candidates.find((candidate) => {
-    return !placedLabels.some((placed) => boxesOverlap(candidate, placed));
-  });
-  if (clearCandidate) return clearCandidate;
-
-  return candidates
-    .map((candidate) => ({
-      candidate,
-      score: placedLabels.reduce((total, placed) => total + getOverlapArea(candidate, placed), 0)
-    }))
-    .sort((a, b) => a.score - b.score)[0].candidate;
-}
-
-function segmentHitsAnotherNode(start, end, nodes, fromNode, toNode) {
-  return nodes.some((node) => {
-    if (node === fromNode || node === toNode) return false;
-    const rect = {
-      x: node.x - 10,
-      y: node.y - 10,
-      width: node.width + 20,
-      height: node.height + 20
-    };
-    return segmentIntersectsRect(start, end, rect);
-  });
-}
-
-function segmentIntersectsRect(start, end, rect) {
-  const left = rect.x;
-  const right = rect.x + rect.width;
-  const top = rect.y;
-  const bottom = rect.y + rect.height;
-  if (pointInRect(start, rect) || pointInRect(end, rect)) return true;
-  return segmentsIntersect(start, end, { x: left, y: top }, { x: right, y: top })
-    || segmentsIntersect(start, end, { x: right, y: top }, { x: right, y: bottom })
-    || segmentsIntersect(start, end, { x: right, y: bottom }, { x: left, y: bottom })
-    || segmentsIntersect(start, end, { x: left, y: bottom }, { x: left, y: top });
-}
-
-function pointInRect(point, rect) {
-  return point.x >= rect.x
-    && point.x <= rect.x + rect.width
-    && point.y >= rect.y
-    && point.y <= rect.y + rect.height;
-}
-
-function segmentsIntersect(a, b, c, d) {
-  const ccw = (p1, p2, p3) => (p3.y - p1.y) * (p2.x - p1.x) > (p2.y - p1.y) * (p3.x - p1.x);
-  return ccw(a, c, d) !== ccw(b, c, d) && ccw(a, b, c) !== ccw(a, b, d);
-}
-
-function getNodeEdgePoint(node, towardNode) {
-  const center = {
-    x: node.x + node.width / 2,
-    y: node.y + node.height / 2
-  };
-  const targetCenter = {
-    x: towardNode.x + towardNode.width / 2,
-    y: towardNode.y + towardNode.height / 2
-  };
-  const dx = targetCenter.x - center.x;
-  const dy = targetCenter.y - center.y;
-  if (dx === 0 && dy === 0) return center;
-
-  const halfWidth = node.width / 2 + 4;
-  const halfHeight = node.height / 2 + 4;
-  const scaleX = dx === 0 ? Infinity : halfWidth / Math.abs(dx);
-  const scaleY = dy === 0 ? Infinity : halfHeight / Math.abs(dy);
-  const scale = Math.min(scaleX, scaleY);
-  return {
-    x: center.x + dx * scale,
-    y: center.y + dy * scale
-  };
-}
-
-function createArrowDefs() {
-  const defs = createSvgElement("defs");
-  const marker = createSvgElement("marker", {
-    id: "arrow-head",
-    markerWidth: 10,
-    markerHeight: 10,
-    refX: 9,
-    refY: 5,
-    orient: "auto",
-    markerUnits: "userSpaceOnUse"
-  });
-  marker.appendChild(createSvgElement("path", {
-    d: "M 0 0 L 10 5 L 0 10 z",
-    fill: "#2f5f83"
-  }));
-  defs.appendChild(marker);
-
-  const dot = createSvgElement("marker", {
-    id: "line-start-dot",
-    markerWidth: 7,
-    markerHeight: 7,
-    refX: 3.5,
-    refY: 3.5,
-    orient: "auto",
-    markerUnits: "userSpaceOnUse"
-  });
-  dot.appendChild(createSvgElement("circle", {
-    cx: 3.5,
-    cy: 3.5,
-    r: 2.6,
-    fill: "#2f5f83"
-  }));
-  defs.appendChild(dot);
-  return defs;
-}
-
-function renderDetail() {
-  const character = getSelectedCharacter();
-  els.detailPanel.innerHTML = "";
-  if (!character) {
-    els.detailPanel.appendChild(createEmptyState());
-    return;
+  const legacyCharacters = await loadLegacyIndexedDbCharacters();
+  if (legacyCharacters.length) {
+    const data = normalizeData({ schemaVersion: 1, characters: legacyCharacters });
+    if (state.canEdit) persistData(data);
+    return data;
   }
 
-  const outgoing = (character.relationships || []).map((relation) => ({
-    ...relation,
-    direction: "to",
-    other: getCharacterById(relation.targetId)
-  }));
-  const detailSections = [];
-  if (character.url) {
-    detailSections.push(`
-      <section class="detail-section">
-        <h3>URL</h3>
-        <p><a href="${escapeHtml(character.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(character.url)}</a></p>
-      </section>
-    `);
-  }
-  detailSections.push(`
-    <section class="detail-section">
-      <h3>説明</h3>
-      <div class="description-box">${escapeHtml(character.description || "説明未登録")}</div>
-    </section>
-  `);
-  if ((character.images || []).length > 0) {
-    detailSections.push(`
-      <section class="detail-section">
-        <h3>画像</h3>
-        <div class="detail-gallery">
-          ${(character.images || []).map((image) => `<img src="${image.url}" alt="${escapeHtml(image.name || character.name)}">`).join("")}
-        </div>
-      </section>
-    `);
-  }
-  if (outgoing.length > 0) {
-    detailSections.push(`
-      <section class="detail-section">
-        <h3>関係線</h3>
-        <div class="detail-relations">
-          ${renderDetailRelations(outgoing)}
-        </div>
-      </section>
-    `);
-  }
-  els.detailPanel.innerHTML = `
-    <div class="detail-hero">
-      ${renderImageTag(character.icon, "detail-icon", character.name)}
-      <div>
-        <h3 class="detail-name">${escapeHtml(character.name)}</h3>
-        <div class="affiliation-chips">${renderChips(character.affiliations)}</div>
-      </div>
-    </div>
-    ${detailSections.join("")}
-  `;
+  return normalizeData({ schemaVersion: 2, characters: [] });
 }
 
-function renderDetailRelations(outgoing) {
-  const rows = [];
-  outgoing.forEach((relation) => {
-    rows.push(`<div class="relation-row"><span><strong>${escapeHtml(relation.other?.name || "削除済み")}</strong> <span>${escapeHtml(relation.label)}</span></span></div>`);
-  });
-  return rows.join("");
+function loadStoredData() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    return raw ? normalizeData(JSON.parse(raw)) : null;
+  } catch (error) {
+    console.error(error);
+    return null;
+  }
 }
 
-function renderAffiliationFilter() {
-  const current = els.listAffiliation.value || "all";
-  els.listAffiliation.innerHTML = "";
-  els.listAffiliation.appendChild(new Option("すべて", "all"));
-  getAllAffiliations().forEach((affiliation) => {
-    els.listAffiliation.appendChild(new Option(affiliation, affiliation));
-  });
-  els.listAffiliation.value = [...els.listAffiliation.options].some((option) => option.value === current) ? current : "all";
+function persistData(data = state.data) {
+  if (!state.canEdit) return;
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(createExportPayload(data)));
 }
 
-function renderListControlsState() {
-  els.listControlsPanel.classList.toggle("is-collapsed", !state.listControlsOpen);
-  els.listControlsToggle.setAttribute("aria-expanded", String(state.listControlsOpen));
-  els.listControlsToggle.textContent = state.listControlsOpen ? "検索・表示 ▲" : "検索・表示 ▼";
-  els.listViewMode.value = state.listViewMode;
-}
-
-function renderCharacterListView() {
-  renderAffiliationFilter();
-  renderListControlsState();
-  const search = els.listSearch.value.trim().toLowerCase();
-  const affiliation = els.listAffiliation.value;
-  const sortMode = els.listSort.value;
-  let characters = [...state.characters];
-
-  if (search) {
-    characters = characters.filter((character) => character.name.toLowerCase().includes(search));
-  }
-  if (affiliation !== "all") {
-    characters = characters.filter((character) => (character.affiliations || []).includes(affiliation));
-  }
-  if (sortMode === "affiliation") {
-    characters.sort((a, b) => {
-      const affiliationCompare = comparePrimaryAffiliation(a, b);
-      return affiliationCompare || COLLATOR.compare(a.name, b.name);
-    });
-  } else {
-    characters = sortByName(characters);
-  }
-
-  els.characterListView.innerHTML = "";
-  els.characterListView.classList.toggle("icon-mode", state.listViewMode === "icon");
-  if (characters.length === 0) {
-    els.characterListView.appendChild(createEmptyState());
-    return;
-  }
-
-  characters.forEach((character) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    if (state.listViewMode === "icon") {
-      button.className = "character-icon-cell";
-      button.innerHTML = `
-        ${renderImageTag(character.icon, "list-icon", character.name)}
-        <span class="list-name">${escapeHtml(character.name)}</span>
-      `;
-      button.addEventListener("click", async () => {
-        await openDetailDialog(character.id);
-      });
-      els.characterListView.appendChild(button);
+function loadLegacyIndexedDbCharacters() {
+  return new Promise((resolve) => {
+    if (!window.indexedDB) {
+      resolve([]);
       return;
     }
 
-    button.className = "character-cell";
-    button.innerHTML = `
-      ${renderImageTag(character.icon, "list-icon", character.name)}
-      <span>
-        <span class="list-name">${escapeHtml(character.name)}</span>
-        <span class="list-affiliations">${renderChips(character.affiliations)}</span>
-      </span>
-      <span class="secondary-button">詳細</span>
-    `;
-    button.addEventListener("click", async () => {
-      await openDetailDialog(character.id);
-    });
-    els.characterListView.appendChild(button);
+    const request = indexedDB.open(LEGACY_DB_NAME);
+    request.onerror = () => resolve([]);
+    request.onupgradeneeded = () => {
+      request.transaction.abort();
+      resolve([]);
+    };
+    request.onsuccess = () => {
+      const db = request.result;
+      if (!db.objectStoreNames.contains(LEGACY_STORE_NAME)) {
+        db.close();
+        resolve([]);
+        return;
+      }
+      const tx = db.transaction(LEGACY_STORE_NAME, "readonly");
+      const getAll = tx.objectStore(LEGACY_STORE_NAME).getAll();
+      getAll.onsuccess = () => resolve(getAll.result || []);
+      getAll.onerror = () => resolve([]);
+      tx.oncomplete = () => db.close();
+    };
   });
 }
 
-async function openCropper(file) {
-  const dataUrl = await fileToDataUrl(file);
-  const image = new Image();
-  image.onload = () => {
-    state.crop.image = image;
-    state.crop.scale = 1;
-    state.crop.offsetX = 0;
-    state.crop.offsetY = 0;
-    els.cropScale.value = "1";
-    els.cropModal.classList.add("is-open");
-    els.cropModal.setAttribute("aria-hidden", "false");
-    drawCropCanvas();
+function createEmptyData() {
+  return {
+    schemaVersion: 2,
+    characters: [],
+    groups: [],
+    relationships: [],
+    relationTypes: DEFAULT_RELATION_TYPES.map((item) => ({ ...item })),
+    terms: [],
+    layout: { characters: {} },
+    updatedAt: new Date().toISOString()
   };
-  image.src = dataUrl;
 }
 
-function closeCropper() {
-  els.cropModal.classList.remove("is-open");
-  els.cropModal.setAttribute("aria-hidden", "true");
-  state.crop.image = null;
-}
+function normalizeData(payload) {
+  const data = createEmptyData();
+  const sourceCharacters = Array.isArray(payload) ? payload : payload?.characters || [];
+  data.characters = sourceCharacters.map(normalizeCharacter).sort(compareByDisplayName);
+  data.relationTypes = normalizeRelationTypes(payload?.relationTypes);
+  data.groups = normalizeGroups(payload?.groups, data.characters);
+  data.relationships = normalizeRelationships(payload, data);
+  data.terms = normalizeTerms(payload?.terms);
+  data.layout = {
+    characters: normalizeCharacterLayout(payload?.layout?.characters, data.characters)
+  };
 
-function drawCropCanvas() {
-  const image = state.crop.image;
-  const canvas = els.cropCanvas;
-  const ctx = canvas.getContext("2d");
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  drawCanvasBackdrop(ctx, canvas.width, canvas.height);
-  if (!image) return;
-  const transform = getCropTransform();
-  ctx.save();
-  ctx.beginPath();
-  ctx.arc(canvas.width / 2, canvas.height / 2, canvas.width / 2, 0, Math.PI * 2);
-  ctx.clip();
-  ctx.drawImage(image, transform.x, transform.y, transform.width, transform.height);
-  ctx.restore();
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.9)";
-  ctx.lineWidth = 2;
-  ctx.beginPath();
-  ctx.arc(canvas.width / 2, canvas.height / 2, canvas.width / 2 - 2, 0, Math.PI * 2);
-  ctx.stroke();
-}
-
-function drawCanvasBackdrop(ctx, width, height) {
-  ctx.fillStyle = "#ece5dc";
-  ctx.fillRect(0, 0, width, height);
-  ctx.fillStyle = "#ded5ca";
-  for (let y = 0; y < height; y += 24) {
-    for (let x = 0; x < width; x += 24) {
-      if ((x + y) % 48 === 0) ctx.fillRect(x, y, 24, 24);
+  for (const character of data.characters) {
+    if (character.position) {
+      data.layout.characters[character.id] = sanitizePosition(character.position);
     }
   }
-}
 
-function getCropTransform() {
-  const image = state.crop.image;
-  const canvas = els.cropCanvas;
-  const baseScale = Math.max(canvas.width / image.width, canvas.height / image.height);
-  const scale = baseScale * state.crop.scale;
-  const width = image.width * scale;
-  const height = image.height * scale;
-  return {
-    width,
-    height,
-    x: (canvas.width - width) / 2 + state.crop.offsetX,
-    y: (canvas.height - height) / 2 + state.crop.offsetY
-  };
-}
-
-function constrainCropOffset() {
-  const image = state.crop.image;
-  if (!image) return;
-  const canvas = els.cropCanvas;
-  const transform = getCropTransform();
-  const maxX = Math.max(0, (transform.width - canvas.width) / 2);
-  const maxY = Math.max(0, (transform.height - canvas.height) / 2);
-  state.crop.offsetX = clamp(state.crop.offsetX, -maxX, maxX);
-  state.crop.offsetY = clamp(state.crop.offsetY, -maxY, maxY);
-}
-
-function startCropDrag(event) {
-  if (!state.crop.image) return;
-  state.crop.dragging = true;
-  state.crop.lastX = event.clientX;
-  state.crop.lastY = event.clientY;
-  els.cropCanvas.setPointerCapture(event.pointerId);
-}
-
-function moveCropDrag(event) {
-  if (!state.crop.dragging) return;
-  state.crop.offsetX += event.clientX - state.crop.lastX;
-  state.crop.offsetY += event.clientY - state.crop.lastY;
-  state.crop.lastX = event.clientX;
-  state.crop.lastY = event.clientY;
-  constrainCropOffset();
-  drawCropCanvas();
-}
-
-function endCropDrag(event) {
-  if (!state.crop.dragging) return;
-  state.crop.dragging = false;
-  if (els.cropCanvas.hasPointerCapture(event.pointerId)) {
-    els.cropCanvas.releasePointerCapture(event.pointerId);
-  }
-}
-
-function zoomCropWithWheel(event) {
-  if (!state.crop.image) return;
-  event.preventDefault();
-  const nextScale = clamp(state.crop.scale + (event.deltaY > 0 ? -0.08 : 0.08), 1, 4);
-  state.crop.scale = nextScale;
-  els.cropScale.value = String(nextScale);
-  constrainCropOffset();
-  drawCropCanvas();
-}
-
-function saveCroppedIcon() {
-  const image = state.crop.image;
-  if (!image) return;
-  const sourceCanvas = els.cropCanvas;
-  const output = document.createElement("canvas");
-  output.width = ICON_OUTPUT_SIZE;
-  output.height = ICON_OUTPUT_SIZE;
-  const outputCtx = output.getContext("2d");
-  outputCtx.clearRect(0, 0, ICON_OUTPUT_SIZE, ICON_OUTPUT_SIZE);
-  outputCtx.save();
-  outputCtx.beginPath();
-  outputCtx.arc(ICON_OUTPUT_SIZE / 2, ICON_OUTPUT_SIZE / 2, ICON_OUTPUT_SIZE / 2, 0, Math.PI * 2);
-  outputCtx.clip();
-  outputCtx.drawImage(sourceCanvas, 0, 0, ICON_OUTPUT_SIZE, ICON_OUTPUT_SIZE);
-  outputCtx.restore();
-  state.draftIcon = output.toDataURL("image/png");
-  renderIconPreview();
-  closeCropper();
-}
-
-function fileToDataUrl(file) {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
-  });
-}
-
-async function fileToImageRecord(file) {
-  return {
-    id: createId(),
-    name: file.name,
-    url: await fileToDataUrl(file)
-  };
-}
-
-function createExportPayload() {
-  return {
-    schemaVersion: 1,
-    exportedAt: new Date().toISOString(),
-    characters: sortByName(state.characters).map(normalizeCharacter)
-  };
-}
-
-async function copyCharactersJson() {
-  const payload = createExportPayload();
-  const text = JSON.stringify(payload, null, 2);
-  try {
-    await copyTextToClipboard(text);
-    setShareStatus("JSONをクリップボードにコピーしました。");
-  } catch (error) {
-    console.error(error);
-    setShareStatus("JSONをコピーできませんでした。ブラウザのクリップボード許可を確認してください。", true);
-  }
-}
-
-async function copyTextToClipboard(text) {
-  if (navigator.clipboard?.writeText) {
-    await navigator.clipboard.writeText(text);
-    return;
-  }
-  const textarea = document.createElement("textarea");
-  textarea.value = text;
-  textarea.setAttribute("readonly", "");
-  textarea.style.position = "fixed";
-  textarea.style.left = "-9999px";
-  textarea.style.top = "0";
-  document.body.appendChild(textarea);
-  textarea.select();
-  const ok = document.execCommand("copy");
-  textarea.remove();
-  if (!ok) throw new Error("copy command failed");
-}
-
-async function loadCharactersFromDefaultJson() {
-  if (window.location.protocol === "file:") {
-    setShareStatus("ローカル確認中はブラウザ保存データを表示します。公開後は characters.json を自動読み込みします。");
-    return getAllCharacters();
-  }
-
-  try {
-    const response = await fetch(`${DEFAULT_DATA_URL}?t=${Date.now()}`, {
-      cache: "no-store"
-    });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const payload = await response.json();
-    const characters = parseCharactersPayload(payload);
-    await applyImportedCharacters(characters);
-    setShareStatus(`characters.json から${characters.length}件を読み込みました。`);
-    return state.characters;
-  } catch (error) {
-    console.error(error);
-    const localCharacters = await getAllCharacters();
-    setShareStatus("characters.json を読み込めなかったため、ブラウザ保存データを表示しています。", true);
-    return localCharacters;
-  }
-}
-
-async function applyImportedCharacters(characters) {
-  await replaceAllCharacters(characters);
-  state.characters = await getAllCharacters();
-  state.selectedId = state.characters[0]?.id || null;
-  resetForm();
-  renderAll();
-}
-
-function parseCharactersPayload(payload) {
-  const source = Array.isArray(payload) ? payload : payload?.characters;
-  if (!Array.isArray(source)) {
-    throw new Error("characters array is missing");
-  }
-
-  return sortByName(source.map((item) => normalizeCharacter({
-    id: item.id || createId(),
-    name: item.name || "名称未設定",
-    url: item.url || "",
-    icon: item.icon || "",
-    images: Array.isArray(item.images) ? item.images : [],
-    description: item.description || "",
-    affiliations: Array.isArray(item.affiliations) ? item.affiliations : [],
-    relationships: Array.isArray(item.relationships) ? item.relationships : [],
-    updatedAt: item.updatedAt || new Date().toISOString()
-  })));
+  data.updatedAt = payload?.updatedAt || payload?.exportedAt || new Date().toISOString();
+  ensureDataLayout(data);
+  return data;
 }
 
 function normalizeCharacter(character) {
+  const id = character?.id || createId("character");
+  const name = String(character?.name || character?.displayName || "名称未設定").trim() || "名称未設定";
+  const displayName = String(character?.displayName || name).trim() || name;
   return {
-    id: character.id || createId(),
-    name: character.name || "名称未設定",
-    url: character.url || "",
-    icon: character.icon || "",
-    images: (character.images || []).map((image) => ({
-      id: image.id || createId(),
-      name: image.name || "",
-      url: image.url || ""
-    })).filter((image) => image.url),
-    description: character.description || "",
-    affiliations: [...new Set((character.affiliations || []).map((item) => String(item).trim()).filter(Boolean))],
-    relationships: (character.relationships || []).map((relation) => ({
-      id: relation.id || createId(),
-      targetId: relation.targetId || "",
-      label: relation.label || ""
-    })).filter((relation) => relation.targetId && relation.label),
-    updatedAt: character.updatedAt || new Date().toISOString()
+    id,
+    name,
+    displayName,
+    image: character?.image || character?.icon || "",
+    description: character?.description || "",
+    affiliations: cleanStringList(character?.affiliations),
+    tags: cleanStringList(character?.tags),
+    memo: character?.memo || "",
+    position: character?.position ? sanitizePosition(character.position) : null
   };
 }
 
-function setShareStatus(message, isError = false) {
-  els.shareStatus.textContent = message;
-  els.shareStatus.classList.toggle("is-error", isError);
+function normalizeRelationTypes(relationTypes) {
+  const byId = new Map(DEFAULT_RELATION_TYPES.map((item) => [item.id, { ...item }]));
+  const byName = new Map(DEFAULT_RELATION_TYPES.map((item) => [item.name, item.id]));
+  if (Array.isArray(relationTypes)) {
+    relationTypes.forEach((item) => {
+      if (!item?.id && !item?.name) return;
+      const id = safeId(item.id || item.name, "relationType");
+      const name = String(item.name || id);
+      const sameNameId = byName.get(name);
+      if (sameNameId && sameNameId !== id) {
+        const existing = byId.get(sameNameId);
+        if (existing) {
+          existing.defaultColor = existing.defaultColor || item.defaultColor || item.color || "#2563eb";
+          existing.defaultLineType = existing.defaultLineType || item.defaultLineType || item.lineType || "solid";
+          existing.description = existing.description || item.description || "";
+        }
+        return;
+      }
+      byId.set(id, {
+        id,
+        name,
+        defaultColor: item.defaultColor || item.color || "#2563eb",
+        defaultLineType: item.defaultLineType || item.lineType || "solid",
+        description: item.description || ""
+      });
+      byName.set(name, id);
+    });
+  }
+  return Array.from(byId.values());
 }
 
-function getAllAffiliations() {
-  const set = new Set();
-  state.characters.forEach((character) => {
-    (character.affiliations || []).forEach((affiliation) => set.add(affiliation));
+function normalizeGroups(groups, characters) {
+  const normalized = [];
+  const seen = new Set();
+  if (Array.isArray(groups)) {
+    groups.forEach((group, index) => {
+      const name = String(group?.name || "所属").trim();
+      if (!name) return;
+      const id = group.id || groupIdFromName(name);
+      seen.add(id);
+      normalized.push({
+        id,
+        name,
+        color: group.color || GROUP_COLORS[index % GROUP_COLORS.length],
+        description: group.description || "",
+        position: group.position ? sanitizePosition(group.position) : null,
+        size: group.size ? sanitizeSize(group.size) : null,
+        memo: group.memo || ""
+      });
+    });
+  }
+
+  const names = new Set();
+  characters.forEach((character) => character.affiliations.forEach((name) => names.add(name)));
+  Array.from(names).sort(COLLATOR.compare).forEach((name) => {
+    const id = groupIdFromName(name);
+    if (seen.has(id)) return;
+    seen.add(id);
+    normalized.push({
+      id,
+      name,
+      color: GROUP_COLORS[normalized.length % GROUP_COLORS.length],
+      description: "",
+      position: null,
+      size: null,
+      memo: ""
+    });
   });
-  return [...set].sort(COLLATOR.compare);
+  return normalized;
 }
 
-function parseAffiliations(value) {
-  return [...new Set(
-    value
-      .split(/[,\n、]/)
-      .map((item) => item.trim())
-      .filter(Boolean)
-  )];
+function normalizeRelationships(payload, data) {
+  const relationTypes = new Map(data.relationTypes.map((item) => [item.id, item]));
+  const relationships = [];
+  const sourceRelationships = Array.isArray(payload?.relationships) ? payload.relationships : [];
+
+  sourceRelationships.forEach((relationship) => {
+    const normalized = normalizeRelationship(relationship, relationTypes);
+    if (normalized && entityExists(normalized.from, data) && entityExists(normalized.to, data)) {
+      relationships.push(normalized);
+    }
+  });
+
+  const legacyCharacters = Array.isArray(payload) ? payload : payload?.characters || [];
+  legacyCharacters.forEach((character) => {
+    const sourceId = character.id;
+    (character.relationships || []).forEach((legacy) => {
+      const targetId = legacy.targetId;
+      if (!sourceId || !targetId) return;
+      const label = legacy.label || "";
+      const relationTypeId = guessRelationType(label);
+      const relationType = relationTypes.get(relationTypeId) || relationTypes.get("trust");
+      const normalized = {
+        id: legacy.id || createId("relationship"),
+        from: { type: "character", id: sourceId },
+        to: { type: "character", id: targetId },
+        relationTypeId,
+        label: label || relationType.name,
+        color: legacy.color || relationType.defaultColor,
+        lineType: legacy.lineType || relationType.defaultLineType,
+        direction: legacy.direction || "forward",
+        memo: legacy.memo || ""
+      };
+      if (entityExists(normalized.from, data) && entityExists(normalized.to, data)) {
+        relationships.push(normalized);
+      }
+    });
+  });
+
+  return dedupeRelationships(relationships);
 }
 
-function cleanRelations(relations) {
-  return relations
-    .filter((relation) => relation.targetId && relation.label)
-    .map((relation) => ({
-      id: relation.id || createId(),
-      targetId: relation.targetId,
-      label: relation.label
-    }));
+function normalizeRelationship(relationship, relationTypes) {
+  if (!relationship?.from || !relationship?.to) return null;
+  const relationTypeId = relationship.relationTypeId || guessRelationType(relationship.label || "");
+  const relationType = relationTypes.get(relationTypeId) || relationTypes.get("trust") || DEFAULT_RELATION_TYPES[0];
+  return {
+    id: relationship.id || createId("relationship"),
+    from: normalizeEndpoint(relationship.from),
+    to: normalizeEndpoint(relationship.to),
+    relationTypeId,
+    label: relationship.label || relationType.name,
+    color: relationship.color || relationType.defaultColor,
+    lineType: relationship.lineType || relationType.defaultLineType,
+    direction: relationship.direction || "forward",
+    memo: relationship.memo || ""
+  };
 }
 
-function sortByName(characters) {
-  return [...characters].sort((a, b) => COLLATOR.compare(a.name || "", b.name || ""));
+function normalizeEndpoint(endpoint) {
+  return {
+    type: endpoint.type === "group" ? "group" : "character",
+    id: endpoint.id
+  };
 }
 
-function comparePrimaryAffiliation(a, b) {
-  const aAffiliation = a.affiliations?.[0] || "";
-  const bAffiliation = b.affiliations?.[0] || "";
-  if (!aAffiliation && !bAffiliation) return 0;
-  if (!aAffiliation) return 1;
-  if (!bAffiliation) return -1;
-  return COLLATOR.compare(aAffiliation, bAffiliation);
+function normalizeTerms(terms) {
+  if (!Array.isArray(terms)) return [];
+  return terms.map((term) => ({
+    id: term.id || createId("term"),
+    term: String(term.term || term.name || "名称未設定").trim() || "名称未設定",
+    description: term.description || "",
+    category: term.category || "その他",
+    memo: term.memo || ""
+  })).sort((a, b) => COLLATOR.compare(a.term, b.term));
 }
 
-function getCharacterById(id) {
-  return state.characters.find((character) => character.id === id);
-}
-
-function getSelectedCharacter() {
-  if (!state.selectedId && state.characters.length > 0) {
-    state.selectedId = state.characters[0].id;
+function normalizeCharacterLayout(layout, characters) {
+  const result = {};
+  if (layout && typeof layout === "object") {
+    characters.forEach((character) => {
+      if (layout[character.id]) result[character.id] = sanitizePosition(layout[character.id]);
+    });
   }
-  return getCharacterById(state.selectedId);
+  return result;
 }
 
-function renderImageTag(src, className, alt) {
+function ensureDataLayout(data) {
+  ensureGroupsForAffiliations(data);
+  data.groups.forEach((group, index) => {
+    if (!group.position) {
+      const column = index % 2;
+      const row = Math.floor(index / 2);
+      group.position = {
+        x: 54 + column * 610,
+        y: 62 + row * 290
+      };
+    }
+    if (!group.size) {
+      group.size = { width: 520, height: 230 };
+    }
+    group.position.x = clamp(group.position.x, 20, BOARD_SIZE.width - 180);
+    group.position.y = clamp(group.position.y, 20, BOARD_SIZE.height - 140);
+    group.size.width = clamp(group.size.width, 240, 720);
+    group.size.height = clamp(group.size.height, 170, 520);
+  });
+
+  const groupSlots = new Map();
+  data.characters.forEach((character, index) => {
+    if (data.layout.characters[character.id]) return;
+    const group = findPrimaryGroup(character, data);
+    if (group) {
+      const used = groupSlots.get(group.id) || 0;
+      groupSlots.set(group.id, used + 1);
+      const columns = Math.max(1, Math.floor((group.size.width - 80) / 150));
+      data.layout.characters[character.id] = {
+        x: group.position.x + 34 + (used % columns) * 150,
+        y: group.position.y + 54 + Math.floor(used / columns) * 160
+      };
+      return;
+    }
+    data.layout.characters[character.id] = {
+      x: 72 + (index % 5) * 160,
+      y: 80 + Math.floor(index / 5) * 170
+    };
+  });
+
+  data.characters.forEach((character) => {
+    const position = data.layout.characters[character.id];
+    position.x = clamp(position.x, 12, BOARD_SIZE.width - NODE_SIZE.width - 12);
+    position.y = clamp(position.y, 12, BOARD_SIZE.height - NODE_SIZE.height - 12);
+  });
+}
+
+function ensureGroupsForAffiliations(data) {
+  const known = new Map(data.groups.map((group) => [group.name, group]));
+  data.characters.forEach((character) => {
+    character.affiliations.forEach((name) => {
+      if (known.has(name)) return;
+      const group = {
+        id: groupIdFromName(name),
+        name,
+        color: GROUP_COLORS[data.groups.length % GROUP_COLORS.length],
+        description: "",
+        position: null,
+        size: null,
+        memo: ""
+      };
+      data.groups.push(group);
+      known.set(name, group);
+    });
+  });
+}
+
+function renderAll() {
+  updateEditUi();
+  renderRelationTypeOptions();
+  renderPlaceCharacterOptions();
+  renderLegend();
+  renderChart();
+  renderSearchResults();
+  renderDetail();
+  renderCharacterGrid();
+  renderCharacterForm();
+  renderTermCategoryFilter();
+  renderTermList();
+  renderTermForm();
+}
+
+function renderRelationTypeOptions() {
+  const current = els.relationTypeSelect.value;
+  els.relationTypeSelect.innerHTML = state.data.relationTypes
+    .map((type) => `<option value="${escapeHtml(type.id)}">${escapeHtml(type.name)}</option>`)
+    .join("") + "<option value=\"custom\">新規作成</option>";
+  els.relationTypeSelect.value = current || state.data.relationTypes[0]?.id || "custom";
+  applyRelationTypeDefaults(false);
+}
+
+function renderPlaceCharacterOptions() {
+  els.placeCharacterSelect.innerHTML = state.data.characters
+    .map((character) => `<option value="${escapeHtml(character.id)}">${escapeHtml(displayName(character))}</option>`)
+    .join("");
+}
+
+function renderLegend() {
+  els.relationLegend.innerHTML = "";
+  if (!state.data.relationTypes.length) {
+    els.relationLegend.appendChild(createEmptyState());
+    return;
+  }
+  els.relationLegend.innerHTML = state.data.relationTypes.map((type) => `
+    <div class="legend-item">
+      <span class="legend-line ${escapeHtml(type.defaultLineType)}" style="border-color:${escapeHtml(type.defaultColor)}"></span>
+      <span>${escapeHtml(type.name)}</span>
+    </div>
+  `).join("");
+}
+
+function renderChart() {
+  ensureDataLayout(state.data);
+  els.chartBoard.innerHTML = "";
+  els.chartBoard.style.width = `${BOARD_SIZE.width}px`;
+  els.chartBoard.style.height = `${BOARD_SIZE.height}px`;
+  els.chartBoard.style.transform = `scale(${state.scale})`;
+  els.chartBoard.classList.toggle("has-selection", Boolean(state.selected));
+  els.zoomLabel.textContent = `${Math.round(state.scale * 100)}%`;
+  els.chartStatus.textContent = state.editMode ? `編集中：${state.tool === "move" ? "配置" : "関係線"}` : "閲覧モード";
+
+  const svg = createSvgElement("svg", {
+    class: "chart-lines",
+    width: BOARD_SIZE.width,
+    height: BOARD_SIZE.height,
+    viewBox: `0 0 ${BOARD_SIZE.width} ${BOARD_SIZE.height}`
+  });
+  const defs = createSvgElement("defs");
+  svg.appendChild(defs);
+
+  state.data.groups.forEach((group) => els.chartBoard.appendChild(createGroupElement(group)));
+  state.data.relationships.forEach((relationship) => drawRelationship(svg, defs, relationship));
+  els.chartBoard.appendChild(svg);
+  state.data.characters.forEach((character) => els.chartBoard.appendChild(createCharacterNode(character)));
+  applySelectionClasses();
+}
+
+function createGroupElement(group) {
+  const box = document.createElement("div");
+  box.className = "group-box";
+  box.dataset.entityType = "group";
+  box.dataset.entityId = group.id;
+  box.style.left = `${group.position.x}px`;
+  box.style.top = `${group.position.y}px`;
+  box.style.width = `${group.size.width}px`;
+  box.style.height = `${group.size.height}px`;
+  box.style.setProperty("--group-color", group.color);
+  box.classList.toggle("is-editing", state.editMode && state.tool === "move");
+  if (isSelected("group", group.id)) box.classList.add("is-selected");
+  if (isRelationSource("group", group.id)) box.classList.add("is-source");
+
+  const label = document.createElement("div");
+  label.className = "group-name";
+  label.textContent = group.name;
+  box.appendChild(label);
+
+  box.addEventListener("pointerdown", (event) => startDrag(event, "group", group.id));
+  box.addEventListener("click", (event) => handleEntityClick(event, "group", group.id));
+  return box;
+}
+
+function createCharacterNode(character) {
+  const position = state.data.layout.characters[character.id];
+  const node = document.createElement("button");
+  node.type = "button";
+  node.className = "chart-node";
+  node.dataset.entityType = "character";
+  node.dataset.entityId = character.id;
+  node.style.left = `${position.x}px`;
+  node.style.top = `${position.y}px`;
+  node.classList.toggle("is-editing", state.editMode && state.tool === "move");
+  if (isSelected("character", character.id)) node.classList.add("is-selected");
+  if (isRelationSource("character", character.id)) node.classList.add("is-source");
+
+  node.innerHTML = `
+    ${renderAvatar(character.image, "node-avatar", displayName(character))}
+    <div class="node-name">${escapeHtml(displayName(character))}</div>
+    <div class="chip-row">${renderChips(character.tags.length ? character.tags : character.affiliations, 2)}</div>
+  `;
+
+  node.addEventListener("pointerdown", (event) => startDrag(event, "character", character.id));
+  node.addEventListener("click", (event) => handleEntityClick(event, "character", character.id));
+  return node;
+}
+
+function drawRelationship(svg, defs, relationship) {
+  const fromBounds = getEntityBounds(relationship.from);
+  const toBounds = getEntityBounds(relationship.to);
+  if (!fromBounds || !toBounds) return;
+
+  const fromCenter = centerOf(fromBounds);
+  const toCenter = centerOf(toBounds);
+  const start = edgePoint(fromBounds, toCenter);
+  const end = edgePoint(toBounds, fromCenter);
+  const mid = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
+  const markerId = `arrow-${relationship.id}`;
+  const reverseMarkerId = `arrow-rev-${relationship.id}`;
+
+  if (relationship.direction === "forward" || relationship.direction === "both") {
+    defs.appendChild(createArrowMarker(markerId, relationship.color));
+  }
+  if (relationship.direction === "backward" || relationship.direction === "both") {
+    defs.appendChild(createArrowMarker(reverseMarkerId, relationship.color));
+  }
+
+  const group = createSvgElement("g", {
+    "data-entity-type": "relationship",
+    "data-entity-id": relationship.id
+  });
+  const d = `M ${start.x} ${start.y} L ${end.x} ${end.y}`;
+  const hit = createSvgElement("path", { class: "relation-path-hit", d });
+  const path = createSvgElement("path", {
+    class: `relation-path ${relationship.lineType}`,
+    d,
+    stroke: relationship.color,
+    "marker-end": relationship.direction === "forward" || relationship.direction === "both" ? `url(#${markerId})` : null,
+    "marker-start": relationship.direction === "backward" || relationship.direction === "both" ? `url(#${reverseMarkerId})` : null
+  });
+
+  hit.addEventListener("click", (event) => {
+    event.stopPropagation();
+    selectEntity("relationship", relationship.id);
+  });
+  path.addEventListener("click", (event) => {
+    event.stopPropagation();
+    selectEntity("relationship", relationship.id);
+  });
+
+  group.append(hit, path);
+  svg.appendChild(group);
+
+  const label = document.createElement("button");
+  label.type = "button";
+  label.className = "relation-label";
+  label.dataset.entityType = "relationship";
+  label.dataset.entityId = relationship.id;
+  label.style.left = `${mid.x}px`;
+  label.style.top = `${mid.y}px`;
+  label.style.color = relationship.color;
+  label.textContent = relationship.label;
+  label.addEventListener("click", () => selectEntity("relationship", relationship.id));
+  els.chartBoard.appendChild(label);
+}
+
+function createArrowMarker(id, color) {
+  const marker = createSvgElement("marker", {
+    id,
+    viewBox: "0 0 10 10",
+    refX: "8",
+    refY: "5",
+    markerWidth: "7",
+    markerHeight: "7",
+    orient: "auto-start-reverse"
+  });
+  marker.appendChild(createSvgElement("path", {
+    d: "M 0 0 L 10 5 L 0 10 z",
+    fill: color
+  }));
+  return marker;
+}
+
+function applySelectionClasses() {
+  if (!state.selected) return;
+  const related = getRelatedEntities(state.selected);
+  const selector = "[data-entity-type][data-entity-id], [data-entity-type='relationship'][data-entity-id]";
+  els.chartBoard.querySelectorAll(selector).forEach((element) => {
+    const type = element.dataset.entityType;
+    const id = element.dataset.entityId;
+    const selected = state.selected?.type === type && state.selected?.id === id;
+    const key = `${type}:${id}`;
+    element.classList.toggle("is-selected", selected);
+    element.classList.toggle("is-related", selected || related.has(key));
+  });
+}
+
+function getRelatedEntities(entity) {
+  const related = new Set();
+  state.data.relationships.forEach((relationship) => {
+    const fromKey = endpointKey(relationship.from);
+    const toKey = endpointKey(relationship.to);
+    const relKey = `relationship:${relationship.id}`;
+    const selectedKey = `${entity.type}:${entity.id}`;
+    if (entity.type === "relationship" && relationship.id === entity.id) {
+      related.add(fromKey);
+      related.add(toKey);
+      related.add(relKey);
+    }
+    if (selectedKey === fromKey || selectedKey === toKey) {
+      related.add(fromKey);
+      related.add(toKey);
+      related.add(relKey);
+    }
+  });
+  return related;
+}
+
+function handleEntityClick(event, type, id) {
+  event.stopPropagation();
+  if (state.justDragged) return;
+  if (state.editMode && state.tool === "relation") {
+    if (!state.relationSource) {
+      state.relationSource = { type, id };
+      state.relationTarget = null;
+      selectEntity(type, id, false);
+    } else if (state.relationSource.type === type && state.relationSource.id === id) {
+      state.relationSource = null;
+      state.relationTarget = null;
+      state.selected = null;
+    } else {
+      state.relationTarget = { type, id };
+      selectEntity(type, id, false);
+    }
+    renderRelationDraftStatus();
+    renderChart();
+    return;
+  }
+  selectEntity(type, id);
+}
+
+function selectEntity(type, id, shouldScroll = true) {
+  state.selected = { type, id };
+  if (type === "character") state.characterEditingId = id;
+  if (type === "term") state.termEditingId = id;
+  renderDetail();
+  renderCharacterForm();
+  renderTermForm();
+  renderChart();
+  if (shouldScroll && (type === "character" || type === "group")) {
+    scrollToEntity(type, id);
+  }
+}
+
+function renderSearchResults() {
+  const query = els.chartSearch.value.trim().toLowerCase();
+  if (!query) {
+    els.searchResults.innerHTML = "";
+    return;
+  }
+
+  const characterMatches = state.data.characters
+    .filter((character) => `${character.name} ${character.displayName}`.toLowerCase().includes(query))
+    .map((character) => ({ type: "character", id: character.id, title: displayName(character), meta: "キャラ" }));
+  const groupMatches = state.data.groups
+    .filter((group) => group.name.toLowerCase().includes(query))
+    .map((group) => ({ type: "group", id: group.id, title: group.name, meta: "所属" }));
+  const matches = [...characterMatches, ...groupMatches].slice(0, 8);
+
+  if (!matches.length) {
+    els.searchResults.replaceChildren(createEmptyState());
+    return;
+  }
+
+  els.searchResults.innerHTML = matches.map((item) => `
+    <button type="button" class="search-result" data-type="${item.type}" data-id="${escapeHtml(item.id)}">
+      <strong>${escapeHtml(item.title)}</strong>
+      <span>${escapeHtml(item.meta)}</span>
+    </button>
+  `).join("");
+
+  els.searchResults.querySelectorAll(".search-result").forEach((button) => {
+    button.addEventListener("click", () => selectEntity(button.dataset.type, button.dataset.id));
+  });
+}
+
+function renderDetail() {
+  const selected = state.selected || firstSelectableEntity();
+  if (!selected) {
+    els.detailContent.replaceChildren(createEmptyState());
+    return;
+  }
+  if (selected.type === "character") renderCharacterDetail(selected.id);
+  if (selected.type === "group") renderGroupDetail(selected.id);
+  if (selected.type === "relationship") renderRelationshipDetail(selected.id);
+}
+
+function renderCharacterDetail(id) {
+  const character = getCharacter(id);
+  if (!character) {
+    els.detailContent.replaceChildren(createEmptyState());
+    return;
+  }
+  const relations = getCharacterRelations(id);
+  els.detailContent.innerHTML = `
+    <div class="detail-head">
+      ${renderAvatar(character.image, "detail-avatar", displayName(character))}
+      <div>
+        <div class="detail-name">${escapeHtml(displayName(character))}</div>
+        <div class="detail-meta">${escapeHtml(character.affiliations.join(" / ") || "所属なし")}</div>
+        <div class="chip-row">${renderChips(character.tags.concat(character.affiliations), 6)}</div>
+      </div>
+    </div>
+    <section class="detail-section">
+      <h3>説明</h3>
+      <p>${escapeHtml(character.description || "未設定")}</p>
+    </section>
+    <section class="detail-section">
+      <h3>関係一覧</h3>
+      ${renderRelationRows(relations)}
+    </section>
+    <section class="detail-section">
+      <h3>メモ</h3>
+      <p>${escapeHtml(character.memo || "未設定")}</p>
+    </section>
+  `;
+  bindRelationRows();
+}
+
+function renderGroupDetail(id) {
+  const group = getGroup(id);
+  if (!group) {
+    els.detailContent.replaceChildren(createEmptyState());
+    return;
+  }
+  const members = state.data.characters.filter((character) => character.affiliations.includes(group.name));
+  els.detailContent.innerHTML = `
+    <div class="detail-head">
+      <div class="detail-avatar" style="color:${escapeHtml(group.color)};background:${escapeHtml(group.color)}22">${escapeHtml(group.name.slice(0, 2))}</div>
+      <div>
+        <div class="detail-name">${escapeHtml(group.name)}</div>
+        <div class="detail-meta">${members.length}人</div>
+      </div>
+    </div>
+    <section class="detail-section">
+      <h3>説明</h3>
+      <p>${escapeHtml(group.description || "未設定")}</p>
+    </section>
+    <section class="detail-section">
+      <h3>所属キャラ</h3>
+      <div class="relation-list">
+        ${members.map((member) => `
+          <button type="button" class="relation-row" data-type="character" data-id="${escapeHtml(member.id)}">
+            <span class="relation-dot" style="background:${escapeHtml(group.color)}"></span>
+            <strong>${escapeHtml(displayName(member))}</strong>
+            <span>詳細</span>
+          </button>
+        `).join("") || "<div class=\"empty-state\">該当なし</div>"}
+      </div>
+    </section>
+    ${state.editMode ? renderGroupEditFields(group) : ""}
+  `;
+  bindRelationRows();
+  bindGroupDetailInputs(group);
+}
+
+function renderGroupEditFields(group) {
+  return `
+    <section class="detail-section editor-stack">
+      <h3>編集</h3>
+      <label class="field">
+        <span>色</span>
+        <input id="detail-group-color" type="color" value="${escapeHtml(group.color)}">
+      </label>
+      <div class="form-grid compact">
+        <label class="field">
+          <span>幅</span>
+          <input id="detail-group-width" type="number" min="240" max="720" value="${group.size.width}">
+        </label>
+        <label class="field">
+          <span>高さ</span>
+          <input id="detail-group-height" type="number" min="170" max="520" value="${group.size.height}">
+        </label>
+      </div>
+      <label class="field">
+        <span>説明</span>
+        <textarea id="detail-group-description" rows="3">${escapeHtml(group.description)}</textarea>
+      </label>
+      <label class="field">
+        <span>メモ</span>
+        <textarea id="detail-group-memo" rows="3">${escapeHtml(group.memo)}</textarea>
+      </label>
+    </section>
+  `;
+}
+
+function bindGroupDetailInputs(group) {
+  if (!state.editMode) return;
+  const color = document.getElementById("detail-group-color");
+  const width = document.getElementById("detail-group-width");
+  const height = document.getElementById("detail-group-height");
+  const description = document.getElementById("detail-group-description");
+  const memo = document.getElementById("detail-group-memo");
+  [color, width, height, description, memo].forEach((input) => {
+    input?.addEventListener("change", () => {
+      group.color = color.value;
+      group.size.width = clamp(Number(width.value) || group.size.width, 240, 720);
+      group.size.height = clamp(Number(height.value) || group.size.height, 170, 520);
+      group.description = description.value;
+      group.memo = memo.value;
+      saveAndRender();
+    });
+  });
+}
+
+function renderRelationshipDetail(id) {
+  const relationship = getRelationship(id);
+  if (!relationship) {
+    els.detailContent.replaceChildren(createEmptyState());
+    return;
+  }
+  const from = entityLabel(relationship.from);
+  const to = entityLabel(relationship.to);
+  els.detailContent.innerHTML = `
+    <div class="detail-section" style="border-top:0;padding-top:0">
+      <h3>${escapeHtml(relationship.label)}</h3>
+      <p>${escapeHtml(from)} ${directionText(relationship.direction)} ${escapeHtml(to)}</p>
+    </div>
+    <section class="detail-section">
+      <h3>設定</h3>
+      <div class="relation-list">
+        <div class="relation-row">
+          <span class="relation-dot" style="background:${escapeHtml(relationship.color)}"></span>
+          <strong>${escapeHtml(relationTypeName(relationship.relationTypeId))}</strong>
+          <span>${escapeHtml(lineTypeName(relationship.lineType))}</span>
+        </div>
+      </div>
+    </section>
+    <section class="detail-section">
+      <h3>メモ</h3>
+      <p>${escapeHtml(relationship.memo || "未設定")}</p>
+    </section>
+    ${state.editMode ? `
+      <section class="detail-section editor-stack">
+        <button type="button" id="delete-relation-detail-button" class="danger-button">関係線を削除</button>
+      </section>
+    ` : ""}
+  `;
+  document.getElementById("delete-relation-detail-button")?.addEventListener("click", () => {
+    state.data.relationships = state.data.relationships.filter((item) => item.id !== id);
+    state.selected = null;
+    saveAndRender();
+  });
+}
+
+function renderRelationRows(relations) {
+  if (!relations.length) return "<div class=\"empty-state\">該当なし</div>";
+  return `
+    <div class="relation-list">
+      ${relations.map(({ relationship, other }) => `
+        <button type="button" class="relation-row" data-type="relationship" data-id="${escapeHtml(relationship.id)}">
+          <span class="relation-dot" style="background:${escapeHtml(relationship.color)}"></span>
+          <strong>${escapeHtml(entityLabel(other))}</strong>
+          <span>${escapeHtml(relationship.label)}</span>
+        </button>
+      `).join("")}
+    </div>
+  `;
+}
+
+function bindRelationRows() {
+  els.detailContent.querySelectorAll(".relation-row[data-type][data-id]").forEach((button) => {
+    button.addEventListener("click", () => selectEntity(button.dataset.type, button.dataset.id));
+  });
+}
+
+function renderCharacterGrid() {
+  const query = els.characterSearch.value.trim().toLowerCase();
+  const characters = state.data.characters
+    .filter((character) => `${character.name} ${character.displayName}`.toLowerCase().includes(query))
+    .sort(compareByDisplayName);
+
+  if (!characters.length) {
+    els.characterGrid.replaceChildren(createEmptyState());
+    return;
+  }
+
+  els.characterGrid.innerHTML = characters.map((character) => `
+    <button type="button" class="character-card" data-id="${escapeHtml(character.id)}">
+      ${renderAvatar(character.image, "character-avatar", displayName(character))}
+      <span>
+        <strong>${escapeHtml(displayName(character))}</strong>
+        <p>${escapeHtml(character.description || character.affiliations.join(" / ") || "未設定")}</p>
+      </span>
+    </button>
+  `).join("");
+
+  els.characterGrid.querySelectorAll(".character-card").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.characterEditingId = button.dataset.id;
+      state.selected = { type: "character", id: button.dataset.id };
+      renderCharacterForm();
+      renderCharacterGrid();
+      renderDetail();
+    });
+  });
+}
+
+function renderCharacterForm() {
+  if (!state.canEdit || !state.editMode) return;
+  const character = getCharacter(state.characterEditingId);
+  const empty = {
+    id: "",
+    name: "",
+    displayName: "",
+    image: "",
+    affiliations: [],
+    tags: [],
+    description: "",
+    memo: ""
+  };
+  const item = character || empty;
+  els.characterIdInput.value = item.id;
+  els.characterNameInput.value = item.name;
+  els.characterDisplayInput.value = item.displayName === item.name ? "" : item.displayName;
+  els.characterImageInput.value = item.image;
+  els.characterAffiliationsInput.value = item.affiliations.join(", ");
+  els.characterTagsInput.value = item.tags.join(", ");
+  els.characterDescriptionInput.value = item.description;
+  els.characterMemoInput.value = item.memo;
+  els.deleteCharacterButton.disabled = !character;
+}
+
+function startNewCharacter() {
+  state.characterEditingId = null;
+  renderCharacterForm();
+  els.characterNameInput.focus();
+}
+
+function saveCharacterForm() {
+  if (!state.editMode) return;
+  const existingId = els.characterIdInput.value;
+  const id = existingId || createId("character");
+  const existing = getCharacter(id);
+  const character = {
+    id,
+    name: els.characterNameInput.value.trim() || "名称未設定",
+    displayName: els.characterDisplayInput.value.trim() || els.characterNameInput.value.trim() || "名称未設定",
+    image: els.characterImageInput.value.trim(),
+    affiliations: splitInputList(els.characterAffiliationsInput.value),
+    tags: splitInputList(els.characterTagsInput.value),
+    description: els.characterDescriptionInput.value.trim(),
+    memo: els.characterMemoInput.value.trim(),
+    position: null
+  };
+
+  if (existing) {
+    Object.assign(existing, character);
+  } else {
+    state.data.characters.push(character);
+    state.data.layout.characters[id] = viewportCenterPosition();
+  }
+
+  state.data.characters.sort(compareByDisplayName);
+  ensureDataLayout(state.data);
+  state.characterEditingId = id;
+  state.selected = { type: "character", id };
+  saveAndRender();
+  showToast("保存しました。");
+}
+
+function deleteEditingCharacter() {
+  if (!state.editMode || !state.characterEditingId) return;
+  const id = state.characterEditingId;
+  state.data.characters = state.data.characters.filter((character) => character.id !== id);
+  state.data.relationships = state.data.relationships.filter((relationship) => (
+    !(relationship.from.type === "character" && relationship.from.id === id) &&
+    !(relationship.to.type === "character" && relationship.to.id === id)
+  ));
+  delete state.data.layout.characters[id];
+  state.characterEditingId = state.data.characters[0]?.id || null;
+  state.selected = firstSelectableEntity();
+  saveAndRender();
+}
+
+function renderTermCategoryFilter() {
+  const current = els.termCategoryFilter.value;
+  const categories = Array.from(new Set(state.data.terms.map((term) => term.category || "その他"))).sort(COLLATOR.compare);
+  els.termCategoryFilter.innerHTML = "<option value=\"all\">すべて</option>" + categories
+    .map((category) => `<option value="${escapeHtml(category)}">${escapeHtml(category)}</option>`)
+    .join("");
+  els.termCategoryFilter.value = categories.includes(current) ? current : "all";
+}
+
+function renderTermList() {
+  const query = els.termSearch.value.trim().toLowerCase();
+  const category = els.termCategoryFilter.value;
+  const terms = state.data.terms
+    .filter((term) => `${term.term} ${term.description}`.toLowerCase().includes(query))
+    .filter((term) => category === "all" || term.category === category)
+    .sort((a, b) => COLLATOR.compare(a.term, b.term));
+
+  if (!terms.length) {
+    els.termList.replaceChildren(createEmptyState());
+    return;
+  }
+
+  els.termList.innerHTML = terms.map((term) => `
+    <button type="button" class="term-card" data-id="${escapeHtml(term.id)}">
+      <span>
+        <strong>${escapeHtml(term.term)}</strong>
+        <p>${escapeHtml(term.description || "未設定")}</p>
+      </span>
+      <span class="category-pill">${escapeHtml(term.category || "その他")}</span>
+    </button>
+  `).join("");
+
+  els.termList.querySelectorAll(".term-card").forEach((button) => {
+    button.addEventListener("click", () => {
+      state.termEditingId = button.dataset.id;
+      renderTermForm();
+    });
+  });
+}
+
+function renderTermForm() {
+  if (!state.canEdit || !state.editMode) return;
+  const term = getTerm(state.termEditingId);
+  const item = term || { id: "", term: "", category: "", description: "", memo: "" };
+  els.termIdInput.value = item.id;
+  els.termNameInput.value = item.term;
+  els.termCategoryInput.value = item.category;
+  els.termDescriptionInput.value = item.description;
+  els.termMemoInput.value = item.memo;
+  els.deleteTermButton.disabled = !term;
+}
+
+function startNewTerm() {
+  state.termEditingId = null;
+  renderTermForm();
+  els.termNameInput.focus();
+}
+
+function saveTermForm() {
+  if (!state.editMode) return;
+  const id = els.termIdInput.value || createId("term");
+  const existing = getTerm(id);
+  const term = {
+    id,
+    term: els.termNameInput.value.trim() || "名称未設定",
+    category: els.termCategoryInput.value.trim() || "その他",
+    description: els.termDescriptionInput.value.trim(),
+    memo: els.termMemoInput.value.trim()
+  };
+  if (existing) {
+    Object.assign(existing, term);
+  } else {
+    state.data.terms.push(term);
+  }
+  state.data.terms.sort((a, b) => COLLATOR.compare(a.term, b.term));
+  state.termEditingId = id;
+  saveAndRender();
+  showToast("保存しました。");
+}
+
+function deleteEditingTerm() {
+  if (!state.editMode || !state.termEditingId) return;
+  const id = state.termEditingId;
+  state.data.terms = state.data.terms.filter((term) => term.id !== id);
+  state.termEditingId = state.data.terms[0]?.id || null;
+  saveAndRender();
+}
+
+function placeCharacterAtCenter() {
+  if (!state.editMode) return;
+  const id = els.placeCharacterSelect.value;
+  if (!id) return;
+  state.data.layout.characters[id] = viewportCenterPosition();
+  selectEntity("character", id);
+  saveAndRender();
+}
+
+function addGroupFromInput() {
+  if (!state.editMode) return;
+  const name = els.groupNameInput.value.trim();
+  if (!name) return;
+  const id = groupIdFromName(name);
+  if (getGroup(id)) {
+    selectEntity("group", id);
+    return;
+  }
+  const position = viewportCenterPosition();
+  const group = {
+    id,
+    name,
+    color: GROUP_COLORS[state.data.groups.length % GROUP_COLORS.length],
+    description: "",
+    position: { x: position.x - 120, y: position.y - 80 },
+    size: { width: 360, height: 220 },
+    memo: ""
+  };
+  state.data.groups.push(group);
+  els.groupNameInput.value = "";
+  state.selected = { type: "group", id };
+  saveAndRender();
+}
+
+function deleteSelected() {
+  if (!state.editMode || !state.selected) return;
+  const { type, id } = state.selected;
+  if (type === "character") {
+    state.characterEditingId = id;
+    deleteEditingCharacter();
+    return;
+  }
+  if (type === "group") {
+    const group = getGroup(id);
+    state.data.groups = state.data.groups.filter((item) => item.id !== id);
+    state.data.characters.forEach((character) => {
+      character.affiliations = character.affiliations.filter((name) => name !== group?.name);
+    });
+    state.data.relationships = state.data.relationships.filter((relationship) => (
+      !(relationship.from.type === "group" && relationship.from.id === id) &&
+      !(relationship.to.type === "group" && relationship.to.id === id)
+    ));
+  }
+  if (type === "relationship") {
+    state.data.relationships = state.data.relationships.filter((relationship) => relationship.id !== id);
+  }
+  state.selected = firstSelectableEntity();
+  saveAndRender();
+}
+
+function renderRelationDraftStatus() {
+  const source = state.relationSource ? entityLabel(state.relationSource) : "接続元を選択";
+  const target = state.relationTarget ? entityLabel(state.relationTarget) : "接続先を選択";
+  els.relationDraftStatus.textContent = state.relationSource ? `${source} → ${target}` : source;
+  els.createRelationButton.disabled = !(state.editMode && state.relationSource && state.relationTarget);
+}
+
+function applyRelationTypeDefaults(shouldOverwriteLabel = true) {
+  const type = state.data.relationTypes.find((item) => item.id === els.relationTypeSelect.value);
+  if (!type) return;
+  els.relationColorInput.value = type.defaultColor;
+  els.relationLineTypeSelect.value = type.defaultLineType;
+  if (shouldOverwriteLabel || !els.relationLabelInput.value.trim()) {
+    els.relationLabelInput.value = type.name;
+  }
+}
+
+function createRelationFromDraft() {
+  if (!state.editMode || !state.relationSource || !state.relationTarget) return;
+  let relationTypeId = els.relationTypeSelect.value;
+  let label = els.relationLabelInput.value.trim();
+  if (!label) label = relationTypeName(relationTypeId);
+
+  if (relationTypeId === "custom") {
+    relationTypeId = safeId(label || "relation", "relationType");
+    if (!state.data.relationTypes.some((type) => type.id === relationTypeId)) {
+      state.data.relationTypes.push({
+        id: relationTypeId,
+        name: label || "新規関係",
+        defaultColor: els.relationColorInput.value,
+        defaultLineType: els.relationLineTypeSelect.value,
+        description: ""
+      });
+    }
+  }
+
+  const relationship = {
+    id: createId("relationship"),
+    from: { ...state.relationSource },
+    to: { ...state.relationTarget },
+    relationTypeId,
+    label,
+    color: els.relationColorInput.value,
+    lineType: els.relationLineTypeSelect.value,
+    direction: els.relationDirectionSelect.value,
+    memo: ""
+  };
+
+  state.data.relationships.push(relationship);
+  state.selected = { type: "relationship", id: relationship.id };
+  state.relationSource = null;
+  state.relationTarget = null;
+  saveAndRender();
+}
+
+function startDrag(event, type, id) {
+  if (!state.editMode || state.tool !== "move" || event.button !== 0) return;
+  event.preventDefault();
+  const point = pointerToBoard(event);
+  const original = type === "character" ? state.data.layout.characters[id] : getGroup(id)?.position;
+  if (!original) return;
+  const group = type === "group" ? getGroup(id) : null;
+  const memberPositions = {};
+  if (group) {
+    state.data.characters.forEach((character) => {
+      if (character.affiliations.includes(group.name)) {
+        memberPositions[character.id] = { ...state.data.layout.characters[character.id] };
+      }
+    });
+  }
+  state.dragging = {
+    type,
+    id,
+    start: point,
+    original: { ...original },
+    memberPositions,
+    moved: false
+  };
+  document.addEventListener("pointermove", moveDrag);
+  document.addEventListener("pointerup", endDrag);
+}
+
+function moveDrag(event) {
+  if (!state.dragging) return;
+  const point = pointerToBoard(event);
+  const dx = point.x - state.dragging.start.x;
+  const dy = point.y - state.dragging.start.y;
+  if (Math.abs(dx) + Math.abs(dy) > 3) state.dragging.moved = true;
+
+  if (state.dragging.type === "character") {
+    const next = {
+      x: clamp(state.dragging.original.x + dx, 12, BOARD_SIZE.width - NODE_SIZE.width - 12),
+      y: clamp(state.dragging.original.y + dy, 12, BOARD_SIZE.height - NODE_SIZE.height - 12)
+    };
+    state.data.layout.characters[state.dragging.id] = next;
+  } else {
+    const group = getGroup(state.dragging.id);
+    if (!group) return;
+    const next = {
+      x: clamp(state.dragging.original.x + dx, 12, BOARD_SIZE.width - group.size.width - 12),
+      y: clamp(state.dragging.original.y + dy, 12, BOARD_SIZE.height - group.size.height - 12)
+    };
+    group.position = next;
+    Object.entries(state.dragging.memberPositions).forEach(([characterId, position]) => {
+      state.data.layout.characters[characterId] = {
+        x: clamp(position.x + dx, 12, BOARD_SIZE.width - NODE_SIZE.width - 12),
+        y: clamp(position.y + dy, 12, BOARD_SIZE.height - NODE_SIZE.height - 12)
+      };
+    });
+  }
+  renderChart();
+}
+
+function endDrag() {
+  if (state.dragging?.moved) {
+    state.justDragged = true;
+    setTimeout(() => {
+      state.justDragged = false;
+    }, 80);
+    persistData();
+  }
+  state.dragging = null;
+  document.removeEventListener("pointermove", moveDrag);
+  document.removeEventListener("pointerup", endDrag);
+}
+
+function pointerToBoard(event) {
+  const rect = els.chartBoard.getBoundingClientRect();
+  return {
+    x: (event.clientX - rect.left) / state.scale,
+    y: (event.clientY - rect.top) / state.scale
+  };
+}
+
+function setScale(nextScale) {
+  state.scale = clamp(Number(nextScale.toFixed(2)), 0.5, 1.4);
+  renderChart();
+}
+
+function fitChart(center = true) {
+  const viewport = els.chartViewport;
+  if (!viewport?.clientWidth) return;
+  const scaleX = viewport.clientWidth / BOARD_SIZE.width;
+  const scaleY = viewport.clientHeight / BOARD_SIZE.height;
+  const minScale = viewport.clientWidth < 760 ? 0.55 : 0.65;
+  state.scale = clamp(Math.min(scaleX, scaleY, 1), minScale, 1);
+  renderChart();
+  if (center) {
+    viewport.scrollLeft = Math.max(0, (BOARD_SIZE.width * state.scale - viewport.clientWidth) / 2);
+    viewport.scrollTop = 0;
+  }
+}
+
+function viewportCenterPosition() {
+  const viewport = els.chartViewport;
+  return {
+    x: clamp((viewport.scrollLeft + viewport.clientWidth / 2) / state.scale - NODE_SIZE.width / 2, 12, BOARD_SIZE.width - NODE_SIZE.width - 12),
+    y: clamp((viewport.scrollTop + viewport.clientHeight / 2) / state.scale - NODE_SIZE.height / 2, 12, BOARD_SIZE.height - NODE_SIZE.height - 12)
+  };
+}
+
+function scrollToEntity(type, id) {
+  const bounds = getEntityBounds({ type, id });
+  if (!bounds) return;
+  els.chartViewport.scrollTo({
+    left: Math.max(0, (bounds.x + bounds.width / 2) * state.scale - els.chartViewport.clientWidth / 2),
+    top: Math.max(0, (bounds.y + bounds.height / 2) * state.scale - els.chartViewport.clientHeight / 2),
+    behavior: "smooth"
+  });
+}
+
+function exportJson() {
+  const payload = createExportPayload(state.data);
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `relationship-data-${new Date().toISOString().slice(0, 10)}.json`;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(url);
+  showToast("JSONを書き出しました。");
+}
+
+async function importJson() {
+  if (!state.canEdit) return;
+  const file = els.importInput.files?.[0];
+  if (!file) return;
+  try {
+    const payload = JSON.parse(await file.text());
+    state.data = normalizeData(payload);
+    state.selected = firstSelectableEntity();
+    state.characterEditingId = state.data.characters[0]?.id || null;
+    state.termEditingId = state.data.terms[0]?.id || null;
+    persistData();
+    renderAll();
+    fitChart(false);
+    showToast("JSONを読み込みました。");
+  } catch (error) {
+    console.error(error);
+    showToast("JSONを読み込めませんでした。");
+  } finally {
+    els.importInput.value = "";
+  }
+}
+
+function createExportPayload(data) {
+  const payload = {
+    schemaVersion: 2,
+    updatedAt: new Date().toISOString(),
+    characters: data.characters.map((character) => ({
+      ...character,
+      position: data.layout.characters[character.id] || character.position || null
+    })),
+    groups: data.groups,
+    relationships: data.relationships,
+    relationTypes: data.relationTypes,
+    terms: data.terms,
+    layout: data.layout
+  };
+  return payload;
+}
+
+function saveAndRender() {
+  ensureDataLayout(state.data);
+  persistData();
+  renderAll();
+}
+
+function firstSelectableEntity() {
+  if (state.data.characters[0]) return { type: "character", id: state.data.characters[0].id };
+  if (state.data.groups[0]) return { type: "group", id: state.data.groups[0].id };
+  if (state.data.relationships[0]) return { type: "relationship", id: state.data.relationships[0].id };
+  return null;
+}
+
+function getCharacter(id) {
+  return state.data.characters.find((character) => character.id === id);
+}
+
+function getGroup(id) {
+  return state.data.groups.find((group) => group.id === id);
+}
+
+function getRelationship(id) {
+  return state.data.relationships.find((relationship) => relationship.id === id);
+}
+
+function getTerm(id) {
+  return state.data.terms.find((term) => term.id === id);
+}
+
+function getEntityBounds(endpoint) {
+  if (endpoint.type === "character") {
+    const position = state.data.layout.characters[endpoint.id];
+    if (!position) return null;
+    return { x: position.x, y: position.y, width: NODE_SIZE.width, height: NODE_SIZE.height };
+  }
+  const group = getGroup(endpoint.id);
+  if (!group) return null;
+  return { x: group.position.x, y: group.position.y, width: group.size.width, height: group.size.height };
+}
+
+function entityExists(endpoint, data = state.data) {
+  if (!endpoint?.id) return false;
+  if (endpoint.type === "group") return data.groups.some((group) => group.id === endpoint.id);
+  return data.characters.some((character) => character.id === endpoint.id);
+}
+
+function entityLabel(endpoint) {
+  if (endpoint.type === "group") return getGroup(endpoint.id)?.name || "不明";
+  const character = getCharacter(endpoint.id);
+  return character ? displayName(character) : "不明";
+}
+
+function endpointKey(endpoint) {
+  return `${endpoint.type}:${endpoint.id}`;
+}
+
+function isSelected(type, id) {
+  return state.selected?.type === type && state.selected?.id === id;
+}
+
+function isRelationSource(type, id) {
+  return state.relationSource?.type === type && state.relationSource?.id === id;
+}
+
+function getCharacterRelations(id) {
+  return state.data.relationships
+    .filter((relationship) => (
+      (relationship.from.type === "character" && relationship.from.id === id) ||
+      (relationship.to.type === "character" && relationship.to.id === id)
+    ))
+    .map((relationship) => {
+      const other = relationship.from.type === "character" && relationship.from.id === id ? relationship.to : relationship.from;
+      return { relationship, other };
+    });
+}
+
+function relationTypeName(id) {
+  return state.data.relationTypes.find((type) => type.id === id)?.name || "関係";
+}
+
+function lineTypeName(lineType) {
+  return { solid: "実線", dashed: "点線", bold: "太線" }[lineType] || lineType;
+}
+
+function directionText(direction) {
+  return { forward: "→", backward: "←", both: "↔", none: "—" }[direction] || "→";
+}
+
+function findPrimaryGroup(character, data = state.data) {
+  const name = character.affiliations[0];
+  return name ? data.groups.find((group) => group.name === name) : null;
+}
+
+function displayName(character) {
+  return character.displayName || character.name || "名称未設定";
+}
+
+function renderAvatar(src, className, label) {
   if (src) {
-    return `<img class="${className}" src="${src}" alt="${escapeHtml(alt || "")}">`;
+    return `<span class="${className}"><img src="${escapeAttribute(src)}" alt=""></span>`;
   }
-  const initials = (alt || "?").trim().slice(0, 2).toUpperCase();
-  return `<svg class="${className}" viewBox="0 0 100 100" role="img" aria-label="${escapeHtml(alt || "画像なし")}">
-    <rect width="100" height="100" rx="50" fill="#e7ded4"></rect>
-    <text x="50" y="56" text-anchor="middle" font-size="24" font-weight="800" fill="#746d65">${escapeHtml(initials)}</text>
-  </svg>`;
+  return `<span class="${className}" aria-hidden="true">${escapeHtml(label.slice(0, 2) || "?")}</span>`;
 }
 
-function renderChips(items) {
-  if (!items?.length) return "";
-  return items.map((item) => `<span class="chip">${escapeHtml(item)}</span>`).join("");
+function renderChips(items, limit = 4) {
+  return cleanStringList(items).slice(0, limit).map((item, index) => {
+    const palette = [
+      ["#dbeafe", "#bfdbfe", "#1d4ed8"],
+      ["#dcfce7", "#bbf7d0", "#15803d"],
+      ["#ffedd5", "#fed7aa", "#c2410c"],
+      ["#fce7f3", "#fbcfe8", "#be185d"],
+      ["#ede9fe", "#ddd6fe", "#6d28d9"]
+    ][index % 5];
+    return `<span class="chip" style="--chip-bg:${palette[0]};--chip-line:${palette[1]};--chip-ink:${palette[2]}">${escapeHtml(item)}</span>`;
+  }).join("");
 }
 
 function createEmptyState() {
   return els.emptyTemplate.content.firstElementChild.cloneNode(true);
 }
 
-function createId() {
-  if (window.crypto?.randomUUID) return crypto.randomUUID();
-  return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+function centerOf(bounds) {
+  return { x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 };
+}
+
+function edgePoint(bounds, toward) {
+  const center = centerOf(bounds);
+  const dx = toward.x - center.x;
+  const dy = toward.y - center.y;
+  if (Math.abs(dx) < 0.001 && Math.abs(dy) < 0.001) return center;
+  const scale = Math.min((bounds.width / 2) / Math.abs(dx || 1), (bounds.height / 2) / Math.abs(dy || 1));
+  return {
+    x: center.x + dx * scale,
+    y: center.y + dy * scale
+  };
+}
+
+function dedupeRelationships(relationships) {
+  const seen = new Set();
+  return relationships.filter((relationship) => {
+    const key = `${relationship.from.type}:${relationship.from.id}:${relationship.to.type}:${relationship.to.id}:${relationship.label}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function guessRelationType(label) {
+  const text = String(label || "");
+  if (/敵|対立|警戒/.test(text)) return "enemy";
+  if (/家族|兄|弟|姉|妹|親|子/.test(text)) return "family";
+  if (/恋|好意|片想/.test(text)) return "love";
+  if (/不明|謎|調査/.test(text)) return "unknown";
+  return "trust";
+}
+
+function sanitizePosition(position) {
+  return {
+    x: Number(position.x) || 0,
+    y: Number(position.y) || 0
+  };
+}
+
+function sanitizeSize(size) {
+  return {
+    width: Number(size.width) || 360,
+    height: Number(size.height) || 220
+  };
+}
+
+function splitInputList(value) {
+  return String(value || "")
+    .split(/[,\n、]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function cleanStringList(items) {
+  if (!Array.isArray(items)) return [];
+  return Array.from(new Set(items.map((item) => String(item || "").trim()).filter(Boolean)));
+}
+
+function compareByDisplayName(a, b) {
+  return COLLATOR.compare(displayName(a), displayName(b));
+}
+
+function groupIdFromName(name) {
+  return safeId(name, "group");
+}
+
+function safeId(value, prefix) {
+  const raw = String(value || "").trim();
+  const ascii = raw.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
+  if (ascii) return `${prefix}_${ascii}`;
+  let hash = 0;
+  for (let i = 0; i < raw.length; i += 1) {
+    hash = ((hash << 5) - hash + raw.charCodeAt(i)) | 0;
+  }
+  return `${prefix}_${Math.abs(hash).toString(36)}`;
+}
+
+function createId(prefix) {
+  if (crypto.randomUUID) return `${prefix}_${crypto.randomUUID()}`;
+  return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function createSvgElement(name, attributes = {}) {
+  const element = document.createElementNS("http://www.w3.org/2000/svg", name);
+  Object.entries(attributes).forEach(([key, value]) => {
+    if (value !== null && value !== undefined) element.setAttribute(key, value);
+  });
+  return element;
 }
 
 function escapeHtml(value) {
-  return String(value)
+  return String(value ?? "")
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
@@ -1963,15 +1764,19 @@ function escapeHtml(value) {
     .replaceAll("'", "&#039;");
 }
 
-function createSvgElement(name, attributes = {}, text = "") {
-  const element = document.createElementNS("http://www.w3.org/2000/svg", name);
-  Object.entries(attributes).forEach(([key, value]) => {
-    element.setAttribute(key, value);
-  });
-  if (text) element.textContent = text;
-  return element;
+function escapeAttribute(value) {
+  return escapeHtml(value).replaceAll("`", "&#096;");
 }
 
 function clamp(value, min, max) {
-  return Math.min(max, Math.max(min, value));
+  return Math.min(Math.max(value, min), max);
+}
+
+function showToast(message) {
+  els.toast.textContent = message;
+  els.toast.classList.add("is-visible");
+  clearTimeout(state.toastTimer);
+  state.toastTimer = setTimeout(() => {
+    els.toast.classList.remove("is-visible");
+  }, 2400);
 }

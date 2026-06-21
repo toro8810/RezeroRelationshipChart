@@ -3,202 +3,259 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>キャラクター相関図ツール</title>
-  <link rel="stylesheet" href="styles.css?v=20260622-1">
+  <title>キャラクター関係図</title>
+  <link rel="stylesheet" href="styles.css?v=20260622-3">
 </head>
 <body>
   <header class="app-header">
-    <div>
-      <p class="eyebrow">Relationship Chart</p>
-      <h1>キャラクター相関図ツール</h1>
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true">◆</span>
+      <h1>キャラクター関係図</h1>
     </div>
-    <nav class="view-tabs" aria-label="画面切り替え">
-      <button type="button" class="tab-button active" data-view="chart">全体図</button>
-      <button type="button" class="tab-button" data-view="list">一覧</button>
-      <button type="button" class="tab-button" data-view="edit">編集</button>
+
+    <nav class="top-tabs" aria-label="表示切り替え">
+      <button type="button" class="tab-button is-active" data-tab="chart">関係図</button>
+      <button type="button" class="tab-button" data-tab="characters">キャラクター</button>
+      <button type="button" class="tab-button" data-tab="terms">用語</button>
     </nav>
+
+    <div class="header-actions">
+      <span id="access-badge" class="access-badge">閲覧専用</span>
+      <label id="edit-toggle-wrap" class="switch-control" hidden>
+        <span>編集</span>
+        <input id="edit-toggle" type="checkbox">
+      </label>
+      <label id="import-label" class="ghost-button file-button" hidden>
+        JSON読込
+        <input id="import-input" type="file" accept="application/json,.json" hidden>
+      </label>
+      <button type="button" id="export-button" class="primary-button">JSON出力</button>
+    </div>
   </header>
 
-  <main class="app-shell">
-    <section id="edit-view" class="view" aria-labelledby="edit-title">
-      <div class="section-title">
-        <h2 id="edit-title">編集画面</h2>
-        <div class="action-row">
-          <button type="button" id="new-character-btn" class="secondary-button">新規</button>
-          <button type="button" id="delete-character-btn" class="danger-button" disabled>削除</button>
-          <button type="button" id="save-character-btn" class="primary-button">保存</button>
+  <main class="app-main">
+    <section id="chart-view" class="tab-view is-active" aria-labelledby="chart-heading">
+      <aside class="side-panel search-panel">
+        <div class="panel-block">
+          <h2 id="chart-heading">検索</h2>
+          <label class="search-box">
+            <span class="sr-only">キャラクターまたは所属を検索</span>
+            <input id="chart-search" type="search" autocomplete="off" placeholder="キャラクター・所属名">
+          </label>
+          <div id="search-results" class="search-results"></div>
         </div>
-      </div>
 
-      <div class="editor-layout">
-        <aside class="side-panel" aria-label="登録キャラクター">
-          <div class="panel-heading">
-            <h3>登録キャラ</h3>
-            <span id="character-count" class="count-pill">0</span>
+        <div class="panel-block edit-only" hidden>
+          <div class="panel-title-row">
+            <h2>編集モード</h2>
+            <div class="segmented-control" role="group" aria-label="編集ツール">
+              <button type="button" class="tool-button is-active" data-tool="move">配置</button>
+              <button type="button" class="tool-button" data-tool="relation">関係線</button>
+            </div>
           </div>
-          <div id="edit-character-list" class="compact-list"></div>
-        </aside>
 
-        <form id="character-form" class="editor-form">
-          <div class="form-grid">
+          <div id="placement-editor" class="editor-stack">
             <label class="field">
-              <span>名前</span>
-              <input id="name-input" type="text" autocomplete="off" required>
+              <span>配置キャラ</span>
+              <select id="place-character-select"></select>
             </label>
+            <button type="button" id="place-character-button" class="ghost-button">中央に配置</button>
 
             <label class="field">
-              <span>所属</span>
-              <input id="affiliations-input" type="text" autocomplete="off" placeholder="王選候補陣営, 騎士団">
+              <span>所属グループ</span>
+              <input id="group-name-input" type="text" autocomplete="off" placeholder="グループ名">
             </label>
+            <button type="button" id="add-group-button" class="ghost-button">グループ作成</button>
+            <button type="button" id="delete-selected-button" class="danger-button" disabled>選択中を削除</button>
           </div>
 
-          <label class="field">
-            <span>URL</span>
-            <input id="url-input" type="url" autocomplete="off" placeholder="https://example.com">
-          </label>
-
-          <label class="field">
-            <span>説明</span>
-            <textarea id="description-input" rows="5"></textarea>
-          </label>
-
-          <div class="media-grid">
-            <section class="media-panel" aria-labelledby="icon-title">
-              <div class="panel-heading">
-                <h3 id="icon-title">アイコン画像</h3>
-                <button type="button" id="choose-icon-btn" class="secondary-button">選択</button>
-              </div>
-              <input id="icon-input" type="file" accept="image/*" hidden>
-              <div class="icon-preview-wrap">
-                <img id="icon-preview" class="icon-preview" alt="">
-                <div id="icon-placeholder" class="icon-placeholder">NO IMAGE</div>
-              </div>
-            </section>
-
-            <section class="media-panel" aria-labelledby="images-title">
-              <div class="panel-heading">
-                <h3 id="images-title">画像</h3>
-                <button type="button" id="choose-images-btn" class="secondary-button">追加</button>
-              </div>
-              <input id="images-input" type="file" accept="image/*" multiple hidden>
-              <div id="image-gallery-editor" class="image-gallery-editor"></div>
-            </section>
+          <div id="relation-editor" class="editor-stack" hidden>
+            <div id="relation-draft-status" class="relation-draft-status">接続元を選択</div>
+            <label class="field">
+              <span>間柄</span>
+              <select id="relation-type-select"></select>
+            </label>
+            <label class="field">
+              <span>ラベル</span>
+              <input id="relation-label-input" type="text" autocomplete="off">
+            </label>
+            <div class="form-grid compact">
+              <label class="field">
+                <span>色</span>
+                <input id="relation-color-input" type="color" value="#2563eb">
+              </label>
+              <label class="field">
+                <span>線</span>
+                <select id="relation-line-type-select">
+                  <option value="solid">実線</option>
+                  <option value="dashed">点線</option>
+                  <option value="bold">太線</option>
+                </select>
+              </label>
+            </div>
+            <label class="field">
+              <span>方向</span>
+              <select id="relation-direction-select">
+                <option value="forward">A → B</option>
+                <option value="backward">A ← B</option>
+                <option value="both">A ↔ B</option>
+                <option value="none">方向なし</option>
+              </select>
+            </label>
+            <button type="button" id="create-relation-button" class="primary-button" disabled>関係線を作成</button>
           </div>
-
-          <section class="relations-editor" aria-labelledby="relations-title">
-            <div class="panel-heading">
-              <h3 id="relations-title">関係線</h3>
-            </div>
-            <div class="relation-add-row">
-              <select id="relation-target-select" aria-label="相手キャラクター"></select>
-              <input id="relation-label-input" type="text" autocomplete="off" placeholder="間柄">
-              <button type="button" id="add-relation-btn" class="secondary-button">追加</button>
-            </div>
-            <div id="relations-list" class="relations-list"></div>
-          </section>
-
-          <section class="share-panel" aria-labelledby="share-title">
-            <div class="panel-heading">
-              <h3 id="share-title">共有データ</h3>
-              <button type="button" id="export-data-btn" class="secondary-button">JSONコピー</button>
-            </div>
-            <p id="share-status" class="share-status"></p>
-          </section>
-        </form>
-      </div>
-    </section>
-
-    <section id="chart-view" class="view is-active" aria-labelledby="chart-title">
-      <div class="section-title">
-        <h2 id="chart-title">全体図</h2>
-        <div class="chart-toolbar">
-          <label class="field compact-field">
-            <span>所属</span>
-            <select id="chart-affiliation-filter"></select>
-          </label>
-          <button type="button" id="fit-chart-btn" class="secondary-button">表示を整える</button>
         </div>
-      </div>
-      <div id="chart-viewport" class="chart-viewport">
-        <div id="chart-zoom-surface" class="chart-zoom-surface">
+
+        <div class="panel-block">
+          <h2>凡例</h2>
+          <div id="relation-legend" class="legend-list"></div>
+        </div>
+      </aside>
+
+      <section class="canvas-panel">
+        <div class="canvas-toolbar">
+          <span id="chart-status" class="status-pill">読み込み中</span>
+          <div class="zoom-controls" aria-label="表示倍率">
+            <button type="button" id="zoom-out-button" class="icon-button" aria-label="縮小">−</button>
+            <span id="zoom-label">100%</span>
+            <button type="button" id="zoom-in-button" class="icon-button" aria-label="拡大">＋</button>
+            <button type="button" id="fit-button" class="icon-button" aria-label="全体表示">□</button>
+          </div>
+        </div>
+        <div id="chart-viewport" class="chart-viewport">
           <div id="chart-board" class="chart-board"></div>
         </div>
+      </section>
+
+      <aside class="detail-panel">
+        <div class="panel-title-row">
+          <h2>詳細</h2>
+          <button type="button" id="clear-selection-button" class="icon-button" aria-label="選択解除">×</button>
+        </div>
+        <div id="detail-content" class="detail-content"></div>
+      </aside>
+    </section>
+
+    <section id="characters-view" class="tab-view" aria-labelledby="characters-heading">
+      <div class="list-shell">
+        <section class="list-panel">
+          <div class="list-header">
+            <h2 id="characters-heading">キャラクター</h2>
+            <label class="search-box">
+              <span class="sr-only">名前検索</span>
+              <input id="character-search" type="search" autocomplete="off" placeholder="名前検索">
+            </label>
+          </div>
+          <div id="character-grid" class="character-grid"></div>
+        </section>
+
+        <aside class="editor-panel edit-only" hidden>
+          <div class="panel-title-row">
+            <h2>キャラクター編集</h2>
+            <button type="button" id="new-character-button" class="ghost-button">新規</button>
+          </div>
+          <form id="character-form" class="editor-form">
+            <input id="character-id-input" type="hidden">
+            <div class="form-grid">
+              <label class="field">
+                <span>キャラクター名</span>
+                <input id="character-name-input" type="text" autocomplete="off" required>
+              </label>
+              <label class="field">
+                <span>表示名</span>
+                <input id="character-display-input" type="text" autocomplete="off">
+              </label>
+            </div>
+            <label class="field">
+              <span>画像</span>
+              <input id="character-image-input" type="text" autocomplete="off" placeholder="画像URLまたはData URL">
+            </label>
+            <div class="form-grid">
+              <label class="field">
+                <span>所属</span>
+                <input id="character-affiliations-input" type="text" autocomplete="off" placeholder="王国, 学園">
+              </label>
+              <label class="field">
+                <span>タグ</span>
+                <input id="character-tags-input" type="text" autocomplete="off" placeholder="主人公, 味方">
+              </label>
+            </div>
+            <label class="field">
+              <span>説明文</span>
+              <textarea id="character-description-input" rows="4"></textarea>
+            </label>
+            <label class="field">
+              <span>メモ</span>
+              <textarea id="character-memo-input" rows="3"></textarea>
+            </label>
+            <div class="action-row">
+              <button type="submit" class="primary-button">保存</button>
+              <button type="button" id="delete-character-button" class="danger-button">削除</button>
+            </div>
+          </form>
+        </aside>
       </div>
     </section>
 
-    <section id="list-view" class="view" aria-labelledby="list-title">
-      <div class="section-title">
-        <h2 id="list-title">キャラ一覧</h2>
-        <button type="button" id="list-controls-toggle" class="secondary-button" aria-expanded="false">検索・表示 ▼</button>
+    <section id="terms-view" class="tab-view" aria-labelledby="terms-heading">
+      <div class="list-shell">
+        <section class="list-panel">
+          <div class="list-header">
+            <h2 id="terms-heading">用語</h2>
+            <div class="list-filters">
+              <label class="search-box">
+                <span class="sr-only">用語検索</span>
+                <input id="term-search" type="search" autocomplete="off" placeholder="用語検索">
+              </label>
+              <select id="term-category-filter" aria-label="カテゴリ">
+                <option value="all">すべて</option>
+              </select>
+            </div>
+          </div>
+          <div id="term-list" class="term-list"></div>
+        </section>
+
+        <aside class="editor-panel edit-only" hidden>
+          <div class="panel-title-row">
+            <h2>用語編集</h2>
+            <button type="button" id="new-term-button" class="ghost-button">新規</button>
+          </div>
+          <form id="term-form" class="editor-form">
+            <input id="term-id-input" type="hidden">
+            <div class="form-grid">
+              <label class="field">
+                <span>用語名</span>
+                <input id="term-name-input" type="text" autocomplete="off" required>
+              </label>
+              <label class="field">
+                <span>カテゴリ</span>
+                <input id="term-category-input" type="text" autocomplete="off" placeholder="組織">
+              </label>
+            </div>
+            <label class="field">
+              <span>説明文</span>
+              <textarea id="term-description-input" rows="5"></textarea>
+            </label>
+            <label class="field">
+              <span>メモ</span>
+              <textarea id="term-memo-input" rows="3"></textarea>
+            </label>
+            <div class="action-row">
+              <button type="submit" class="primary-button">保存</button>
+              <button type="button" id="delete-term-button" class="danger-button">削除</button>
+            </div>
+          </form>
+        </aside>
       </div>
-      <div id="list-controls-panel" class="list-controls is-collapsed">
-        <label class="field">
-          <span>名前検索</span>
-          <input id="list-search-input" type="search" autocomplete="off">
-        </label>
-        <label class="field">
-          <span>所属</span>
-          <select id="list-affiliation-filter"></select>
-        </label>
-        <label class="field">
-          <span>並び順</span>
-          <select id="list-sort-select">
-            <option value="name">50音順</option>
-            <option value="affiliation">所属順</option>
-          </select>
-        </label>
-        <label class="field">
-          <span>表示</span>
-          <select id="list-view-mode-select">
-            <option value="detail">詳細表示</option>
-            <option value="icon" selected>アイコン表示</option>
-          </select>
-        </label>
-      </div>
-      <div id="character-list-view" class="character-list-view"></div>
     </section>
   </main>
 
-  <div id="detail-modal" class="detail-modal" aria-hidden="true">
-    <div class="detail-dialog" role="dialog" aria-modal="true" aria-labelledby="detail-title">
-      <div class="modal-head">
-        <h2 id="detail-title">キャラクター詳細</h2>
-        <div class="action-row">
-          <button type="button" id="edit-selected-btn" class="secondary-button">編集する</button>
-          <button type="button" id="detail-close-btn" class="icon-button" aria-label="閉じる">×</button>
-        </div>
-      </div>
-      <div id="detail-panel" class="detail-panel"></div>
-    </div>
-  </div>
-
-  <div id="crop-modal" class="modal" aria-hidden="true">
-    <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="crop-title">
-      <div class="modal-head">
-        <h2 id="crop-title">アイコン切り抜き</h2>
-        <button type="button" id="crop-close-btn" class="icon-button" aria-label="閉じる">×</button>
-      </div>
-      <div class="crop-workspace">
-        <canvas id="crop-canvas" width="320" height="320"></canvas>
-      </div>
-      <label class="field">
-        <span>拡大</span>
-        <input id="crop-scale-input" type="range" min="1" max="4" step="0.01" value="1">
-      </label>
-      <div class="action-row end">
-        <button type="button" id="crop-cancel-btn" class="secondary-button">キャンセル</button>
-        <button type="button" id="crop-save-btn" class="primary-button">決定</button>
-      </div>
-    </div>
-  </div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <template id="empty-template">
-    <div class="empty-state">
-      <strong>キャラクターが未登録です</strong>
-      <span>編集画面でキャラクターを追加してください。</span>
-    </div>
+    <div class="empty-state">該当なし</div>
   </template>
 
-  <script src="app.js?v=20260622-1"></script>
+  <script src="app.js?v=20260622-3"></script>
 </body>
 </html>
