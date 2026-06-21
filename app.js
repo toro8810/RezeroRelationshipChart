@@ -23,8 +23,10 @@ const state = {
   editMode: false,
   tool: "move",
   selected: null,
+  detailEntity: null,
   relationSource: null,
   relationTarget: null,
+  chartPinch: null,
   sidePanelOpen: false,
   jsonFileHandle: null,
   scale: 1,
@@ -87,6 +89,7 @@ function bindElements() {
   els.relationLineTypeSelect = document.getElementById("relation-line-type-select");
   els.relationDirectionSelect = document.getElementById("relation-direction-select");
   els.createRelationButton = document.getElementById("create-relation-button");
+  els.selectedEditor = document.getElementById("selected-editor");
   els.chartStatus = document.getElementById("chart-status");
   els.chartViewport = document.getElementById("chart-viewport");
   els.chartBoard = document.getElementById("chart-board");
@@ -137,6 +140,8 @@ function bindEvents() {
     state.editMode = els.editToggle.checked;
     state.relationSource = null;
     state.relationTarget = null;
+    state.detailEntity = null;
+    closeDetail();
     updateEditUi();
     renderAll();
   });
@@ -168,6 +173,10 @@ function bindEvents() {
   els.zoomOutButton.addEventListener("click", () => setScale(state.scale - 0.1));
   els.zoomInButton.addEventListener("click", () => setScale(state.scale + 0.1));
   els.fitButton.addEventListener("click", fitChart);
+  els.chartViewport.addEventListener("touchstart", startChartPinch, { passive: false });
+  els.chartViewport.addEventListener("touchmove", moveChartPinch, { passive: false });
+  els.chartViewport.addEventListener("touchend", endChartPinch);
+  els.chartViewport.addEventListener("touchcancel", endChartPinch);
   els.chartBoard.addEventListener("click", (event) => {
     if (!event.target.closest("[data-entity-type]")) {
       clearSelection();
@@ -216,6 +225,10 @@ function updateAccessUi() {
 function updateEditUi() {
   els.editToggle.checked = state.editMode;
   if (state.editMode) state.sidePanelOpen = true;
+  if (state.editMode) {
+    state.detailEntity = null;
+    closeDetail();
+  }
   updateSidePanelUi();
   els.editOnly.forEach((el) => {
     el.hidden = !(state.canEdit && state.editMode);
@@ -426,6 +439,7 @@ function normalizeGroups(groups, characters) {
         description: group.description || "",
         position: group.position ? sanitizePosition(group.position) : null,
         size: group.size ? sanitizeSize(group.size) : null,
+        manualSize: group.manualSize ? sanitizeSize(group.manualSize) : null,
         memo: group.memo || ""
       });
     });
@@ -553,8 +567,8 @@ function ensureDataLayout(data) {
     }
     group.position.x = clamp(group.position.x, 0, BOARD_SIZE.width - 120);
     group.position.y = clamp(group.position.y, 0, BOARD_SIZE.height - 100);
-    group.size.width = clamp(group.size.width, 240, 1200);
-    group.size.height = clamp(group.size.height, 170, 900);
+    group.size.width = Math.max(group.size.width, 240);
+    group.size.height = Math.max(group.size.height, 170);
   });
 
   const groupSlots = new Map();
@@ -605,8 +619,8 @@ function autoShapeGroups(data) {
     const paddingX = 46;
     const paddingTop = 54;
     const paddingBottom = 36;
-    const minWidth = group.size?.width || 260;
-    const minHeight = group.size?.height || 180;
+    const minWidth = group.manualSize?.width || 240;
+    const minHeight = group.manualSize?.height || 170;
     const left = Math.min(...boxes.map((box) => box.left));
     const top = Math.min(...boxes.map((box) => box.top));
     const right = Math.max(...boxes.map((box) => box.right));
@@ -619,8 +633,8 @@ function autoShapeGroups(data) {
       y: clamp(top - paddingTop, 0, BOARD_SIZE.height - 100)
     };
     group.size = {
-      width: clamp(Math.max(minWidth, contentWidth), 240, 1200),
-      height: clamp(Math.max(minHeight, contentHeight), 170, 900)
+      width: Math.max(minWidth, contentWidth),
+      height: Math.max(minHeight, contentHeight)
     };
   });
 }
@@ -637,6 +651,7 @@ function ensureGroupsForAffiliations(data) {
         description: "",
         position: null,
         size: null,
+        manualSize: null,
         memo: ""
       };
       data.groups.push(group);
@@ -653,6 +668,7 @@ function renderAll() {
   renderChart();
   renderSearchResults();
   renderDetail();
+  renderSelectedEditor();
   renderCharacterGrid();
   renderCharacterForm();
   renderTermCategoryFilter();
@@ -832,11 +848,14 @@ function drawRelationship(svg, defs, relationship) {
 }
 
 function handleRelationshipClick(id) {
-  if (!state.editMode && state.selected?.type === "character") {
-    clearSelection();
-    return;
-  }
-  selectEntity("relationship", id);
+  state.selected = { type: "relationship", id };
+  state.detailEntity = null;
+  closeDetail();
+  renderDetail();
+  renderCharacterForm();
+  renderTermForm();
+  renderSelectedEditor();
+  renderChart();
 }
 
 function createArrowMarker(id, color) {
@@ -896,12 +915,12 @@ function handleEntityClick(event, type, id) {
   if (state.justDragged) return;
   if (state.editMode && state.tool === "relation") {
     if (!state.relationSource) {
-      if (type !== "character") return;
       state.relationSource = { type, id };
       state.relationTarget = null;
       state.selected = { type, id };
       renderRelationDraftStatus();
       renderChart();
+      renderSelectedEditor();
       return;
     }
     if (state.relationSource.type === type && state.relationSource.id === id) {
@@ -910,6 +929,7 @@ function handleEntityClick(event, type, id) {
       state.selected = null;
       renderRelationDraftStatus();
       renderChart();
+      renderSelectedEditor();
       return;
     }
     const target = { type, id };
@@ -921,16 +941,23 @@ function handleEntityClick(event, type, id) {
     clearSelection();
     return;
   }
-  selectEntity(type, id);
+  selectEntity(type, id, true, type === "character");
 }
 
 function selectEntity(type, id, shouldScroll = true, openDetail = true) {
   state.selected = { type, id };
   if (type === "character") state.characterEditingId = id;
   if (type === "term") state.termEditingId = id;
-  if (openDetail) renderDetail();
+  if (openDetail && !state.editMode) {
+    state.detailEntity = { type, id };
+  } else {
+    state.detailEntity = null;
+    closeDetail();
+  }
+  renderDetail();
   renderCharacterForm();
   renderTermForm();
+  renderSelectedEditor();
   renderChart();
   if (shouldScroll && (type === "character" || type === "group")) {
     scrollToEntity(type, id);
@@ -939,11 +966,13 @@ function selectEntity(type, id, shouldScroll = true, openDetail = true) {
 
 function clearSelection() {
   state.selected = null;
+  state.detailEntity = null;
   state.relationSource = null;
   state.relationTarget = null;
   closeDetail();
   renderChart();
   renderRelationDraftStatus();
+  renderSelectedEditor();
 }
 
 function openDetail() {
@@ -984,14 +1013,18 @@ function renderSearchResults() {
   `).join("");
 
   els.searchResults.querySelectorAll(".search-result").forEach((button) => {
-    button.addEventListener("click", () => selectEntity(button.dataset.type, button.dataset.id));
+    button.addEventListener("click", () => selectEntity(button.dataset.type, button.dataset.id, true, button.dataset.type === "character"));
   });
 }
 
 function renderDetail() {
-  const selected = state.selected;
+  const selected = state.detailEntity;
   if (!selected) {
     els.detailContent.replaceChildren(createEmptyState());
+    closeDetail();
+    return;
+  }
+  if (state.editMode) {
     closeDetail();
     return;
   }
@@ -1091,11 +1124,11 @@ function renderGroupEditFields(group) {
       <div class="form-grid compact">
         <label class="field">
           <span>幅</span>
-          <input id="detail-group-width" type="number" min="240" max="720" value="${group.size.width}">
+          <input id="detail-group-width" type="number" min="240" value="${Math.round(group.manualSize?.width || group.size.width)}">
         </label>
         <label class="field">
           <span>高さ</span>
-          <input id="detail-group-height" type="number" min="170" max="520" value="${group.size.height}">
+          <input id="detail-group-height" type="number" min="170" value="${Math.round(group.manualSize?.height || group.size.height)}">
         </label>
       </div>
       <label class="field">
@@ -1129,8 +1162,12 @@ function bindGroupDetailInputs(group) {
         });
       }
       group.color = color.value;
-      group.size.width = clamp(Number(width.value) || group.size.width, 240, 720);
-      group.size.height = clamp(Number(height.value) || group.size.height, 170, 520);
+      group.manualSize = {
+        width: Math.max(Number(width.value) || group.size.width, 240),
+        height: Math.max(Number(height.value) || group.size.height, 170)
+      };
+      group.size.width = group.manualSize.width;
+      group.size.height = group.manualSize.height;
       group.description = description.value;
       group.memo = memo.value;
       saveAndRender();
@@ -1264,6 +1301,94 @@ function bindRelationshipDetailInputs(relationship) {
   });
 }
 
+function renderSelectedEditor() {
+  if (!els.selectedEditor) return;
+  if (!state.editMode) {
+    els.selectedEditor.innerHTML = "";
+    return;
+  }
+  if (!state.selected) {
+    els.selectedEditor.innerHTML = "<div class=\"empty-state\">未選択</div>";
+    return;
+  }
+
+  if (state.selected.type === "group") {
+    const group = getGroup(state.selected.id);
+    if (!group) {
+      els.selectedEditor.innerHTML = "<div class=\"empty-state\">未選択</div>";
+      return;
+    }
+    els.selectedEditor.innerHTML = renderGroupEditFields(group);
+    bindGroupDetailInputs(group);
+    return;
+  }
+
+  if (state.selected.type === "relationship") {
+    const relationship = getRelationship(state.selected.id);
+    if (!relationship) {
+      els.selectedEditor.innerHTML = "<div class=\"empty-state\">未選択</div>";
+      return;
+    }
+    els.selectedEditor.innerHTML = renderRelationshipEditFields(relationship);
+    bindRelationshipDetailInputs(relationship);
+    document.getElementById("delete-relation-detail-button")?.addEventListener("click", () => {
+      state.data.relationships = state.data.relationships.filter((item) => item.id !== relationship.id);
+      state.selected = null;
+      saveAndRender();
+    });
+    return;
+  }
+
+  els.selectedEditor.innerHTML = "<div class=\"empty-state\">キャラはドラッグで配置できます</div>";
+}
+
+function renderRelationshipEditFields(relationship) {
+  return `
+    <section class="detail-section editor-stack">
+      <label class="field">
+        <span>関係設定</span>
+        <select id="detail-relation-type">
+          ${state.data.relationTypes.map((type) => `
+            <option value="${escapeHtml(type.id)}" ${type.id === relationship.relationTypeId ? "selected" : ""}>${escapeHtml(type.name)}</option>
+          `).join("")}
+        </select>
+      </label>
+      <label class="field">
+        <span>ラベル</span>
+        <input id="detail-relation-label" type="text" value="${escapeHtml(relationship.label)}">
+      </label>
+      <div class="form-grid compact">
+        <label class="field">
+          <span>色</span>
+          <input id="detail-relation-color" type="color" value="${escapeHtml(relationship.color)}">
+        </label>
+        <label class="field">
+          <span>線のタイプ</span>
+          <select id="detail-relation-line-type">
+            <option value="solid" ${relationship.lineType === "solid" ? "selected" : ""}>実線</option>
+            <option value="dashed" ${relationship.lineType === "dashed" ? "selected" : ""}>点線</option>
+            <option value="bold" ${relationship.lineType === "bold" ? "selected" : ""}>太線</option>
+          </select>
+        </label>
+      </div>
+      <label class="field">
+        <span>方向</span>
+        <select id="detail-relation-direction">
+          <option value="forward" ${relationship.direction === "forward" ? "selected" : ""}>A → B</option>
+          <option value="backward" ${relationship.direction === "backward" ? "selected" : ""}>A ← B</option>
+          <option value="both" ${relationship.direction === "both" ? "selected" : ""}>A ↔ B</option>
+          <option value="none" ${relationship.direction === "none" ? "selected" : ""}>方向なし</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>メモ</span>
+        <textarea id="detail-relation-memo" rows="3">${escapeHtml(relationship.memo)}</textarea>
+      </label>
+      <button type="button" id="delete-relation-detail-button" class="danger-button">関係線を削除</button>
+    </section>
+  `;
+}
+
 function applyRelationStyleToType(relationTypeId, patch) {
   const relationType = state.data.relationTypes.find((item) => item.id === relationTypeId);
   if (relationType) {
@@ -1322,7 +1447,12 @@ function renderCharacterGrid() {
   els.characterGrid.querySelectorAll(".character-card").forEach((button) => {
     button.addEventListener("click", () => {
       state.characterEditingId = button.dataset.id;
-      state.selected = { type: "character", id: button.dataset.id };
+      if (state.editMode) {
+        state.detailEntity = null;
+        closeDetail();
+      } else {
+        state.detailEntity = { type: "character", id: button.dataset.id };
+      }
       renderCharacterForm();
       renderCharacterGrid();
       renderDetail();
@@ -1532,6 +1662,7 @@ function addGroupFromInput() {
     description: "",
     position: { x: position.x - 120, y: position.y - 80 },
     size: { width: 360, height: 220 },
+    manualSize: null,
     memo: ""
   };
   state.data.groups.push(group);
@@ -1572,7 +1703,7 @@ function deleteSelected() {
 }
 
 function renderRelationDraftStatus() {
-  const source = state.relationSource ? entityLabel(state.relationSource) : "基準キャラを選択";
+  const source = state.relationSource ? entityLabel(state.relationSource) : "基準キャラ・所属枠を選択";
   els.relationDraftStatus.textContent = state.relationSource ? `${source} から伸ばす対象を選択` : source;
   els.createRelationButton.disabled = !(state.editMode && state.relationSource && state.relationTarget);
 }
@@ -1631,15 +1762,14 @@ function createRelationBetween(source, target) {
 }
 
 function canConnectRelationTarget(source, target) {
-  if (!source || !target || source.type !== "character") return false;
+  if (!source || !target || !entityVisibleOnChart(source)) return false;
   if (source.type === target.type && source.id === target.id) return false;
   if (!entityVisibleOnChart(target)) return false;
 
-  const sourceCharacter = getCharacter(source.id);
-  if (!sourceCharacter || sourceCharacter.chartVisible === false) return false;
-  if (target.type === "group") {
+  if (source.type === "character" && target.type === "group") {
+    const sourceCharacter = getCharacter(source.id);
     const group = getGroup(target.id);
-    if (!group || sourceCharacter.affiliations.includes(group.name)) return false;
+    if (!sourceCharacter || sourceCharacter.chartVisible === false || !group || sourceCharacter.affiliations.includes(group.name)) return false;
   }
 
   return !state.data.relationships.some((relationship) => (
@@ -1732,6 +1862,51 @@ function pointerToBoard(event) {
 function setScale(nextScale) {
   state.scale = clamp(Number(nextScale.toFixed(2)), 0.5, 1.4);
   renderChart();
+}
+
+function startChartPinch(event) {
+  if (event.touches.length !== 2) return;
+  event.preventDefault();
+  const center = getTouchCenter(event.touches);
+  state.chartPinch = {
+    distance: getTouchDistance(event.touches),
+    scale: state.scale,
+    center,
+    boardX: (els.chartViewport.scrollLeft + center.x) / state.scale,
+    boardY: (els.chartViewport.scrollTop + center.y) / state.scale
+  };
+}
+
+function moveChartPinch(event) {
+  if (!state.chartPinch || event.touches.length !== 2) return;
+  event.preventDefault();
+  const center = getTouchCenter(event.touches);
+  const distance = getTouchDistance(event.touches);
+  const nextScale = clamp(state.chartPinch.scale * (distance / state.chartPinch.distance), 0.5, 1.4);
+  state.scale = Number(nextScale.toFixed(2));
+  renderChart();
+  els.chartViewport.scrollLeft = state.chartPinch.boardX * state.scale - center.x;
+  els.chartViewport.scrollTop = state.chartPinch.boardY * state.scale - center.y;
+}
+
+function endChartPinch(event) {
+  if (event.touches.length < 2) {
+    state.chartPinch = null;
+  }
+}
+
+function getTouchCenter(touches) {
+  const rect = els.chartViewport.getBoundingClientRect();
+  return {
+    x: ((touches[0].clientX + touches[1].clientX) / 2) - rect.left,
+    y: ((touches[0].clientY + touches[1].clientY) / 2) - rect.top
+  };
+}
+
+function getTouchDistance(touches) {
+  const dx = touches[0].clientX - touches[1].clientX;
+  const dy = touches[0].clientY - touches[1].clientY;
+  return Math.hypot(dx, dy);
 }
 
 function fitChart(center = true) {
