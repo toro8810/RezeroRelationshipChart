@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>キャラクター関係図</title>
-  <link rel="stylesheet" href="styles.css?v=20260623-3">
+  <link rel="stylesheet" href="styles.css?v=20260623-4">
 </head>
 <body>
   <header class="app-header">
@@ -27,14 +27,14 @@
       </label>
       <button type="button" id="import-button" class="ghost-button file-button" hidden>JSON読込</button>
       <input id="import-input" type="file" accept="application/json,.json" hidden>
-      <button type="button" id="export-button" class="primary-button">JSON上書き</button>
+      <button type="button" id="export-button" class="primary-button" hidden>JSON上書き</button>
     </div>
   </header>
 
   <main class="app-main">
     <section id="chart-view" class="tab-view is-active" aria-labelledby="chart-heading">
       <aside id="side-panel" class="side-panel search-panel is-collapsed">
-        <button type="button" id="side-panel-toggle" class="panel-toggle" aria-expanded="false">検索・凡例</button>
+        <button type="button" id="side-panel-toggle" class="panel-toggle" aria-expanded="false">検索</button>
         <div class="panel-block">
           <h2 id="chart-heading">検索</h2>
           <label class="search-box">
@@ -110,7 +110,7 @@
           </div>
         </div>
 
-        <div class="panel-block">
+        <div class="panel-block" hidden>
           <h2>凡例</h2>
           <div id="relation-legend" class="legend-list"></div>
         </div>
@@ -300,6 +300,6 @@
     <div class="empty-state">該当なし</div>
   </template>
 
-  <script src="app.js?v=20260623-3"></script>
+  <script src="app.js?v=20260623-4"></script>
 </body>
 </html>

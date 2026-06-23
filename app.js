@@ -247,9 +247,10 @@ function updateAccessUi() {
   if (!state.canEdit) state.editMode = false;
   els.accessBadge.textContent = state.canEdit ? "編集可能版" : "閲覧専用";
   els.accessBadge.hidden = !state.canEdit;
-  els.sidePanelToggle.textContent = state.canEdit ? "検索・凡例・編集" : "検索・凡例";
+  els.sidePanelToggle.textContent = state.canEdit ? "検索・編集" : "検索";
   els.editToggleWrap.hidden = !state.canEdit;
   els.importButton.hidden = !state.canEdit;
+  els.exportButton.hidden = !state.canEdit;
   updateEditUi();
 }
 
@@ -260,6 +261,7 @@ function updateEditUi() {
     state.detailEntity = null;
     closeDetail();
   }
+  els.views.chart.classList.toggle("is-edit-mode", state.canEdit && state.editMode);
   updateSidePanelUi();
   els.editOnly.forEach((el) => {
     el.hidden = !(state.canEdit && state.editMode);

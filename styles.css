@@ -306,6 +306,13 @@ h3 {
   display: grid;
 }
 
+#chart-view.is-edit-mode {
+  grid-template-columns: 340px minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  height: calc(100vh - var(--header-height));
+  min-height: 620px;
+}
+
 .side-panel,
 .detail-panel {
   background: var(--surface);
@@ -315,6 +322,17 @@ h3 {
   overflow: hidden;
   border-right: 0;
   border-bottom: 1px solid var(--line);
+}
+
+#chart-view.is-edit-mode .side-panel {
+  height: 100%;
+  overflow: auto;
+  border-right: 1px solid var(--line);
+  border-bottom: 0;
+}
+
+#chart-view.is-edit-mode .panel-toggle {
+  display: none;
 }
 
 .side-panel:not(.is-collapsed) {
