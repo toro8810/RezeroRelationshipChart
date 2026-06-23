@@ -24,6 +24,10 @@
   box-sizing: border-box;
 }
 
+[hidden] {
+  display: none !important;
+}
+
 html,
 body {
   min-height: 100%;
@@ -591,7 +595,7 @@ textarea:focus,
     linear-gradient(90deg, #eef4ff 1px, transparent 1px),
     #fbfdff;
   background-size: 28px 28px;
-  touch-action: pan-x pan-y;
+  touch-action: none;
 }
 
 .chart-board {
@@ -599,7 +603,7 @@ textarea:focus,
   width: 2400px;
   height: 1800px;
   transform-origin: 0 0;
-  touch-action: pan-x pan-y;
+  touch-action: none;
 }
 
 .group-box,
@@ -610,7 +614,7 @@ textarea:focus,
 .relation-path-hit,
 .group-box *,
 .chart-node * {
-  touch-action: pan-x pan-y;
+  touch-action: none;
 }
 
 .chart-lines {

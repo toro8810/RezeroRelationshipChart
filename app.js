@@ -38,6 +38,7 @@ const state = {
   characterCrop: null,
   termEditingId: null,
   dragging: null,
+  chartPan: null,
   justDragged: false,
   toastTimer: null
 };
@@ -190,6 +191,7 @@ function bindEvents() {
   els.zoomOutButton.addEventListener("click", () => setScale(state.scale - 0.1));
   els.zoomInButton.addEventListener("click", () => setScale(state.scale + 0.1));
   els.fitButton.addEventListener("click", () => fitChart(true, true));
+  els.chartViewport.addEventListener("pointerdown", startChartPan);
   els.chartViewport.addEventListener("touchstart", startChartPinch, { passive: false, capture: true });
   els.chartViewport.addEventListener("touchmove", moveChartPinch, { passive: false, capture: true });
   els.chartViewport.addEventListener("touchend", endChartPinch);
@@ -2077,11 +2079,54 @@ function applyScale() {
   els.zoomLabel.textContent = `${Math.round(state.scale * 100)}%`;
 }
 
+function startChartPan(event) {
+  if (event.button !== 0 || event.pointerType === "mouse") return;
+  if (state.editMode && state.tool === "move" && event.target.closest("[data-entity-type]")) return;
+  if (event.target.closest(".detail-panel")) return;
+  state.chartPan = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    scrollLeft: els.chartViewport.scrollLeft,
+    scrollTop: els.chartViewport.scrollTop,
+    moved: false
+  };
+  els.chartViewport.setPointerCapture?.(event.pointerId);
+  els.chartViewport.addEventListener("pointermove", moveChartPan);
+  els.chartViewport.addEventListener("pointerup", endChartPan, { once: true });
+  els.chartViewport.addEventListener("pointercancel", endChartPan, { once: true });
+}
+
+function moveChartPan(event) {
+  const pan = state.chartPan;
+  if (!pan || pan.pointerId !== event.pointerId || state.chartPinch) return;
+  const dx = event.clientX - pan.startX;
+  const dy = event.clientY - pan.startY;
+  if (Math.abs(dx) + Math.abs(dy) > 3) pan.moved = true;
+  if (!pan.moved) return;
+  event.preventDefault();
+  els.chartViewport.scrollLeft = pan.scrollLeft - dx;
+  els.chartViewport.scrollTop = pan.scrollTop - dy;
+}
+
+function endChartPan(event) {
+  if (state.chartPan?.pointerId === event.pointerId && state.chartPan.moved) {
+    state.justDragged = true;
+    setTimeout(() => {
+      state.justDragged = false;
+    }, 80);
+  }
+  state.chartPan = null;
+  els.chartViewport.removeEventListener("pointermove", moveChartPan);
+}
+
 function startChartPinch(event) {
   if (event.touches.length !== 2) return;
   event.preventDefault();
   event.stopPropagation();
   cancelDrag();
+  state.chartPan = null;
+  els.chartViewport.removeEventListener("pointermove", moveChartPan);
   state.manualScale = true;
   const center = getTouchCenter(event.touches);
   state.chartPinch = {
