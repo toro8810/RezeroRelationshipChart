@@ -33,6 +33,7 @@ const state = {
   sidePanelOpen: false,
   jsonFileHandle: null,
   scale: 1,
+  manualScale: false,
   characterEditingId: null,
   characterCrop: null,
   termEditingId: null,
@@ -56,7 +57,7 @@ async function init() {
   state.characterEditingId = state.data.characters[0]?.id || null;
   state.termEditingId = state.data.terms[0]?.id || null;
   renderAll();
-  fitChart();
+  fitChart(true, false);
 }
 
 function bindElements() {
@@ -188,9 +189,9 @@ function bindEvents() {
   els.createRelationButton.addEventListener("click", createRelationFromDraft);
   els.zoomOutButton.addEventListener("click", () => setScale(state.scale - 0.1));
   els.zoomInButton.addEventListener("click", () => setScale(state.scale + 0.1));
-  els.fitButton.addEventListener("click", fitChart);
-  els.chartViewport.addEventListener("touchstart", startChartPinch, { passive: false });
-  els.chartViewport.addEventListener("touchmove", moveChartPinch, { passive: false });
+  els.fitButton.addEventListener("click", () => fitChart(true, true));
+  els.chartViewport.addEventListener("touchstart", startChartPinch, { passive: false, capture: true });
+  els.chartViewport.addEventListener("touchmove", moveChartPinch, { passive: false, capture: true });
   els.chartViewport.addEventListener("touchend", endChartPinch);
   els.chartViewport.addEventListener("touchcancel", endChartPinch);
   els.chartBoard.addEventListener("click", (event) => {
@@ -231,7 +232,7 @@ function bindEvents() {
   els.deleteTermButton.addEventListener("click", deleteEditingTerm);
 
   window.addEventListener("resize", () => {
-    if (state.activeTab === "chart") fitChart(false);
+    if (state.activeTab === "chart" && !state.manualScale && !state.chartPinch) fitChart(false, false);
   });
 }
 
@@ -241,7 +242,9 @@ function isLocalEditingHost() {
 }
 
 function updateAccessUi() {
+  if (!state.canEdit) state.editMode = false;
   els.accessBadge.textContent = state.canEdit ? "編集可能版" : "閲覧専用";
+  els.sidePanelToggle.textContent = state.canEdit ? "検索・凡例・編集" : "検索・凡例";
   els.editToggleWrap.hidden = !state.canEdit;
   els.importButton.hidden = !state.canEdit;
   updateEditUi();
@@ -282,8 +285,8 @@ function setActiveTab(tab) {
   state.activeTab = tab;
   els.tabs.forEach((button) => button.classList.toggle("is-active", button.dataset.tab === tab));
   Object.entries(els.views).forEach(([key, view]) => view.classList.toggle("is-active", key === tab));
-  if (tab === "chart") {
-    requestAnimationFrame(() => fitChart(false));
+  if (tab === "chart" && !state.manualScale) {
+    requestAnimationFrame(() => fitChart(false, false));
   }
 }
 
@@ -1976,6 +1979,7 @@ function canConnectRelationTarget(source, target) {
 
 function startDrag(event, type, id) {
   if (!state.editMode || state.tool !== "move" || event.button !== 0) return;
+  if (state.chartPinch) return;
   event.preventDefault();
   const point = pointerToBoard(event);
   const original = type === "character" ? state.data.layout.characters[id] : getGroup(id)?.position;
@@ -2002,7 +2006,7 @@ function startDrag(event, type, id) {
 }
 
 function moveDrag(event) {
-  if (!state.dragging) return;
+  if (!state.dragging || state.chartPinch) return;
   const point = pointerToBoard(event);
   const dx = point.x - state.dragging.start.x;
   const dy = point.y - state.dragging.start.y;
@@ -2045,6 +2049,12 @@ function endDrag() {
   document.removeEventListener("pointerup", endDrag);
 }
 
+function cancelDrag() {
+  state.dragging = null;
+  document.removeEventListener("pointermove", moveDrag);
+  document.removeEventListener("pointerup", endDrag);
+}
+
 function pointerToBoard(event) {
   const rect = els.chartBoard.getBoundingClientRect();
   return {
@@ -2055,12 +2065,16 @@ function pointerToBoard(event) {
 
 function setScale(nextScale) {
   state.scale = clamp(Number(nextScale.toFixed(2)), MIN_SCALE, MAX_SCALE);
+  state.manualScale = true;
   renderChart();
 }
 
 function startChartPinch(event) {
   if (event.touches.length !== 2) return;
   event.preventDefault();
+  event.stopPropagation();
+  cancelDrag();
+  state.manualScale = true;
   const center = getTouchCenter(event.touches);
   state.chartPinch = {
     distance: getTouchDistance(event.touches),
@@ -2074,6 +2088,7 @@ function startChartPinch(event) {
 function moveChartPinch(event) {
   if (!state.chartPinch || event.touches.length !== 2) return;
   event.preventDefault();
+  event.stopPropagation();
   const center = getTouchCenter(event.touches);
   const distance = getTouchDistance(event.touches);
   const nextScale = clamp(state.chartPinch.scale * (distance / state.chartPinch.distance), MIN_SCALE, MAX_SCALE);
@@ -2103,12 +2118,13 @@ function getTouchDistance(touches) {
   return Math.hypot(dx, dy);
 }
 
-function fitChart(center = true) {
+function fitChart(center = true, markManual = false) {
   const viewport = els.chartViewport;
   if (!viewport?.clientWidth) return;
   const scaleX = viewport.clientWidth / BOARD_SIZE.width;
   const scaleY = viewport.clientHeight / BOARD_SIZE.height;
   state.scale = clamp(Math.min(scaleX, scaleY, 1), MIN_SCALE, 1);
+  state.manualScale = markManual;
   renderChart();
   if (center) {
     viewport.scrollLeft = Math.max(0, (BOARD_SIZE.width * state.scale - viewport.clientWidth) / 2);
@@ -2216,9 +2232,10 @@ async function applyJsonText(text) {
   state.selected = null;
   state.characterEditingId = state.data.characters[0]?.id || null;
   state.termEditingId = state.data.terms[0]?.id || null;
+  state.manualScale = false;
   persistData();
   renderAll();
-  fitChart(false);
+  fitChart(false, false);
 }
 
 async function writeJsonToHandle(handle, text) {

@@ -599,6 +599,18 @@ textarea:focus,
   width: 2400px;
   height: 1800px;
   transform-origin: 0 0;
+  touch-action: pan-x pan-y;
+}
+
+.group-box,
+.chart-node,
+.relation-label,
+.chart-lines,
+.relation-path,
+.relation-path-hit,
+.group-box *,
+.chart-node * {
+  touch-action: pan-x pan-y;
 }
 
 .chart-lines {
