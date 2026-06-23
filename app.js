@@ -244,6 +244,7 @@ function isLocalEditingHost() {
 function updateAccessUi() {
   if (!state.canEdit) state.editMode = false;
   els.accessBadge.textContent = state.canEdit ? "編集可能版" : "閲覧専用";
+  els.accessBadge.hidden = !state.canEdit;
   els.sidePanelToggle.textContent = state.canEdit ? "検索・凡例・編集" : "検索・凡例";
   els.editToggleWrap.hidden = !state.canEdit;
   els.importButton.hidden = !state.canEdit;
@@ -740,11 +741,12 @@ function renderChart() {
   els.chartBoard.innerHTML = "";
   els.chartBoard.style.width = `${BOARD_SIZE.width}px`;
   els.chartBoard.style.height = `${BOARD_SIZE.height}px`;
-  els.chartBoard.style.transform = `scale(${state.scale})`;
   els.chartBoard.classList.toggle("has-selection", Boolean(state.selected));
   els.chartBoard.classList.toggle("has-relation-source", Boolean(state.relationSource));
-  els.zoomLabel.textContent = `${Math.round(state.scale * 100)}%`;
-  els.chartStatus.textContent = state.editMode ? `編集中：${state.tool === "move" ? "配置" : "関係線"}` : "閲覧モード";
+  els.chartStatus.hidden = !state.canEdit;
+  if (state.canEdit) {
+    els.chartStatus.textContent = state.editMode ? `編集中：${state.tool === "move" ? "配置" : "関係線"}` : "閲覧モード";
+  }
 
   const svg = createSvgElement("svg", {
     class: "chart-lines",
@@ -760,6 +762,7 @@ function renderChart() {
   els.chartBoard.appendChild(svg);
   getChartCharacters().forEach((character) => els.chartBoard.appendChild(createCharacterNode(character)));
   applySelectionClasses();
+  applyScale();
 }
 
 function createGroupElement(group) {
@@ -2066,7 +2069,12 @@ function pointerToBoard(event) {
 function setScale(nextScale) {
   state.scale = clamp(Number(nextScale.toFixed(2)), MIN_SCALE, MAX_SCALE);
   state.manualScale = true;
-  renderChart();
+  applyScale();
+}
+
+function applyScale() {
+  els.chartBoard.style.transform = `scale(${state.scale})`;
+  els.zoomLabel.textContent = `${Math.round(state.scale * 100)}%`;
 }
 
 function startChartPinch(event) {
@@ -2093,7 +2101,7 @@ function moveChartPinch(event) {
   const distance = getTouchDistance(event.touches);
   const nextScale = clamp(state.chartPinch.scale * (distance / state.chartPinch.distance), MIN_SCALE, MAX_SCALE);
   state.scale = Number(nextScale.toFixed(2));
-  renderChart();
+  applyScale();
   els.chartViewport.scrollLeft = state.chartPinch.boardX * state.scale - center.x;
   els.chartViewport.scrollTop = state.chartPinch.boardY * state.scale - center.y;
 }
