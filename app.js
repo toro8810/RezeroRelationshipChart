@@ -99,6 +99,7 @@ function bindElements() {
   els.chartStatus = document.getElementById("chart-status");
   els.chartViewport = document.getElementById("chart-viewport");
   els.chartBoard = document.getElementById("chart-board");
+  els.chartContent = document.getElementById("chart-content");
   els.zoomLabel = document.getElementById("zoom-label");
   els.zoomOutButton = document.getElementById("zoom-out-button");
   els.zoomInButton = document.getElementById("zoom-in-button");
@@ -192,11 +193,13 @@ function bindEvents() {
   els.zoomInButton.addEventListener("click", () => setScale(state.scale + 0.1));
   els.fitButton.addEventListener("click", () => fitChart(true, true));
   els.chartViewport.addEventListener("pointerdown", startChartPan);
+  els.chartViewport.addEventListener("wheel", zoomChartWithWheel, { passive: false });
   els.chartViewport.addEventListener("touchstart", startChartPinch, { passive: false, capture: true });
   els.chartViewport.addEventListener("touchmove", moveChartPinch, { passive: false, capture: true });
   els.chartViewport.addEventListener("touchend", endChartPinch);
   els.chartViewport.addEventListener("touchcancel", endChartPinch);
   els.chartBoard.addEventListener("click", (event) => {
+    if (state.justDragged) return;
     if (!event.target.closest("[data-entity-type]")) {
       clearSelection();
     }
@@ -742,9 +745,7 @@ function renderLegend() {
 
 function renderChart() {
   ensureDataLayout(state.data);
-  els.chartBoard.innerHTML = "";
-  els.chartBoard.style.width = `${BOARD_SIZE.width}px`;
-  els.chartBoard.style.height = `${BOARD_SIZE.height}px`;
+  els.chartContent.innerHTML = "";
   els.chartBoard.classList.toggle("has-selection", Boolean(state.selected));
   els.chartBoard.classList.toggle("has-relation-source", Boolean(state.relationSource));
   els.chartStatus.hidden = !state.canEdit;
@@ -761,10 +762,10 @@ function renderChart() {
   const defs = createSvgElement("defs");
   svg.appendChild(defs);
 
-  state.data.groups.forEach((group) => els.chartBoard.appendChild(createGroupElement(group)));
+  state.data.groups.forEach((group) => els.chartContent.appendChild(createGroupElement(group)));
   getChartRelationships().forEach((relationship) => drawRelationship(svg, defs, relationship));
-  els.chartBoard.appendChild(svg);
-  getChartCharacters().forEach((character) => els.chartBoard.appendChild(createCharacterNode(character)));
+  els.chartContent.appendChild(svg);
+  getChartCharacters().forEach((character) => els.chartContent.appendChild(createCharacterNode(character)));
   applySelectionClasses();
   applyScale();
 }
@@ -878,10 +879,11 @@ function drawRelationship(svg, defs, relationship) {
   label.style.color = relationship.color;
   label.textContent = relationship.label;
   label.addEventListener("click", () => handleRelationshipClick(relationship.id));
-  els.chartBoard.appendChild(label);
+  els.chartContent.appendChild(label);
 }
 
 function handleRelationshipClick(id) {
+  if (state.justDragged) return;
   state.selected = { type: "relationship", id };
   state.detailEntity = null;
   closeDetail();
@@ -913,7 +915,7 @@ function applySelectionClasses() {
   if (!state.selected) return;
   const related = getRelatedEntities(state.selected);
   const selector = "[data-entity-type][data-entity-id], [data-entity-type='relationship'][data-entity-id]";
-  els.chartBoard.querySelectorAll(selector).forEach((element) => {
+  els.chartContent.querySelectorAll(selector).forEach((element) => {
     const type = element.dataset.entityType;
     const id = element.dataset.entityId;
     const selected = state.selected?.type === type && state.selected?.id === id;
@@ -2063,7 +2065,7 @@ function cancelDrag() {
 }
 
 function pointerToBoard(event) {
-  const rect = els.chartBoard.getBoundingClientRect();
+  const rect = els.chartContent.getBoundingClientRect();
   return {
     x: (event.clientX - rect.left) / state.scale,
     y: (event.clientY - rect.top) / state.scale
@@ -2071,20 +2073,25 @@ function pointerToBoard(event) {
 }
 
 function setScale(nextScale) {
-  state.scale = clamp(Number(nextScale.toFixed(2)), MIN_SCALE, MAX_SCALE);
+  state.scale = normalizeScale(nextScale);
   state.manualScale = true;
   applyScale();
 }
 
 function applyScale() {
-  els.chartBoard.style.transform = `scale(${state.scale})`;
+  els.chartBoard.style.width = `${BOARD_SIZE.width * state.scale}px`;
+  els.chartBoard.style.height = `${BOARD_SIZE.height * state.scale}px`;
+  els.chartContent.style.width = `${BOARD_SIZE.width}px`;
+  els.chartContent.style.height = `${BOARD_SIZE.height}px`;
+  els.chartContent.style.transform = `scale(${state.scale})`;
   els.zoomLabel.textContent = `${Math.round(state.scale * 100)}%`;
 }
 
 function startChartPan(event) {
-  if (event.button !== 0 || event.pointerType === "mouse") return;
-  if (state.editMode && state.tool === "move" && event.target.closest("[data-entity-type]")) return;
-  if (event.target.closest(".detail-panel")) return;
+  if (event.button !== 0) return;
+  const target = event.target instanceof Element ? event.target : null;
+  if (state.editMode && target?.closest("[data-entity-type]")) return;
+  if (target?.closest(".detail-panel")) return;
   state.chartPan = {
     pointerId: event.pointerId,
     startX: event.clientX,
@@ -2094,6 +2101,7 @@ function startChartPan(event) {
     moved: false
   };
   els.chartViewport.setPointerCapture?.(event.pointerId);
+  els.chartViewport.classList.add("is-panning");
   els.chartViewport.addEventListener("pointermove", moveChartPan);
   els.chartViewport.addEventListener("pointerup", endChartPan, { once: true });
   els.chartViewport.addEventListener("pointercancel", endChartPan, { once: true });
@@ -2119,7 +2127,45 @@ function endChartPan(event) {
     }, 80);
   }
   state.chartPan = null;
+  els.chartViewport.releasePointerCapture?.(event.pointerId);
+  els.chartViewport.classList.remove("is-panning");
   els.chartViewport.removeEventListener("pointermove", moveChartPan);
+}
+
+function zoomChartWithWheel(event) {
+  if (state.chartPinch) return;
+  event.preventDefault();
+  const rect = els.chartViewport.getBoundingClientRect();
+  const viewportX = event.clientX - rect.left;
+  const viewportY = event.clientY - rect.top;
+  const deltaY = normalizeWheelDelta(event);
+  const nextScale = state.scale * Math.exp(-deltaY * 0.0015);
+  zoomChartAt(nextScale, viewportX, viewportY);
+}
+
+function normalizeWheelDelta(event) {
+  if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) return event.deltaY * 16;
+  if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) return event.deltaY * els.chartViewport.clientHeight;
+  return event.deltaY;
+}
+
+function normalizeScale(nextScale) {
+  return clamp(Number(nextScale.toFixed(3)), MIN_SCALE, MAX_SCALE);
+}
+
+function zoomChartAt(nextScale, viewportX, viewportY) {
+  const viewport = els.chartViewport;
+  const previousScale = state.scale;
+  const normalizedScale = normalizeScale(nextScale);
+  if (normalizedScale === previousScale) return;
+
+  const boardX = (viewport.scrollLeft + viewportX) / previousScale;
+  const boardY = (viewport.scrollTop + viewportY) / previousScale;
+  state.scale = normalizedScale;
+  state.manualScale = true;
+  applyScale();
+  viewport.scrollLeft = boardX * state.scale - viewportX;
+  viewport.scrollTop = boardY * state.scale - viewportY;
 }
 
 function startChartPinch(event) {
@@ -2128,6 +2174,7 @@ function startChartPinch(event) {
   event.stopPropagation();
   cancelDrag();
   state.chartPan = null;
+  els.chartViewport.classList.remove("is-panning");
   els.chartViewport.removeEventListener("pointermove", moveChartPan);
   state.manualScale = true;
   const center = getTouchCenter(event.touches);
@@ -2146,8 +2193,8 @@ function moveChartPinch(event) {
   event.stopPropagation();
   const center = getTouchCenter(event.touches);
   const distance = getTouchDistance(event.touches);
-  const nextScale = clamp(state.chartPinch.scale * (distance / state.chartPinch.distance), MIN_SCALE, MAX_SCALE);
-  state.scale = Number(nextScale.toFixed(2));
+  const nextScale = state.chartPinch.scale * (distance / state.chartPinch.distance);
+  state.scale = normalizeScale(nextScale);
   applyScale();
   els.chartViewport.scrollLeft = state.chartPinch.boardX * state.scale - center.x;
   els.chartViewport.scrollTop = state.chartPinch.boardY * state.scale - center.y;

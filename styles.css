@@ -606,6 +606,8 @@ textarea:focus,
 }
 
 .chart-viewport {
+  min-width: 0;
+  min-height: 0;
   overflow: auto;
   overscroll-behavior: contain;
   background:
@@ -613,6 +615,7 @@ textarea:focus,
     linear-gradient(90deg, #eef4ff 1px, transparent 1px),
     #fbfdff;
   background-size: 28px 28px;
+  cursor: grab;
   touch-action: none;
 }
 
@@ -620,8 +623,28 @@ textarea:focus,
   position: relative;
   width: 2400px;
   height: 1800px;
+  overflow: hidden;
+  touch-action: none;
+}
+
+.chart-content {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 2400px;
+  height: 1800px;
   transform-origin: 0 0;
   touch-action: none;
+}
+
+.chart-viewport.is-panning {
+  cursor: grabbing;
+  user-select: none;
+}
+
+.chart-viewport.is-panning .chart-board,
+.chart-viewport.is-panning .chart-content {
+  cursor: grabbing;
 }
 
 .group-box,
@@ -1250,12 +1273,17 @@ textarea:focus,
   }
 
   #chart-view {
-    height: auto;
+    height: max(690px, calc(100vh - var(--header-height)));
+    min-height: 0;
+  }
+
+  #chart-view.is-edit-mode {
+    height: max(690px, calc(100vh - var(--header-height)));
     min-height: 0;
   }
 
   .canvas-panel {
-    min-height: 690px;
+    min-height: 0;
   }
 
   .list-shell {
@@ -1296,8 +1324,13 @@ textarea:focus,
     max-height: none;
   }
 
+  #chart-view,
+  #chart-view.is-edit-mode {
+    height: max(560px, calc(100vh - var(--header-height)));
+  }
+
   .canvas-panel {
-    min-height: 560px;
+    min-height: 0;
   }
 
   .canvas-toolbar,
